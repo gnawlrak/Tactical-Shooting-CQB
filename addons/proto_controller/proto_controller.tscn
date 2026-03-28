@@ -1,0 +1,159 @@
+[gd_scene format=3 uid="uid://bs72ogkvdd7d6"]
+
+[ext_resource type="Script" uid="uid://fivoslpbhhcx" path="res://addons/proto_controller/proto_controller.gd" id="1_ucva2"]
+[ext_resource type="PackedScene" uid="uid://cpdeav0u32xtt" path="res://models/low-poly_sig_mcx.glb" id="2_wr06p"]
+[ext_resource type="AudioStream" uid="uid://dw10ab8nec7lp" path="res://sounds/mcx半自动.mp3" id="2_x436g"]
+[ext_resource type="PackedScene" uid="uid://b3m03yag4k4c7" path="res://models/john_wicks_glock_inspired_gun.glb" id="3_glock"]
+[ext_resource type="AudioStream" uid="uid://bbi4wk5vvkib0" path="res://sounds/ttig34.mp3" id="3_x436g"]
+[ext_resource type="AudioStream" uid="uid://dynmpaquh23sq" path="res://sounds/换弹.mp3" id="4_q1ipm"]
+[ext_resource type="AudioStream" uid="uid://dqd1en0eeolqr" path="res://sounds/空放.mp3" id="5_ue3g7"]
+[ext_resource type="AudioStream" uid="uid://cbp57dqqr0rob" path="res://sounds/弹壳落地.mp3" id="6_2yh8o"]
+[ext_resource type="AudioStream" uid="uid://o1jj06tmcj1s" path="res://sounds/脚步.mp3" id="7_cisnj"]
+[ext_resource type="AudioStream" uid="uid://bndqmpl84rxsp" path="res://sounds/命中.mp3" id="8_x436g"]
+[ext_resource type="Script" uid="uid://dyjhm0beaf4hd" path="res://addons/proto_controller/Hitbox.gd" id="9_hitbox"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_iof21"]
+albedo_color = Color(0.91806, 0.575202, 0.222449, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_ucva2"]
+radius = 0.3
+height = 1.2
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_iof21"]
+radius = 0.3
+height = 0.7777344
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_head"]
+radius = 0.25
+
+[node name="ProtoController" type="CharacterBody3D" unique_id=1400360840 groups=["player"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.3, 0)
+script = ExtResource("1_ucva2")
+can_sprint = true
+base_speed = 3.0
+jump_velocity = 3.0
+primary_single_fire_sound = ExtResource("2_x436g")
+primary_auto_fire_sound = ExtResource("2_x436g")
+secondary_fire_sound = ExtResource("3_x436g")
+reload_sound = ExtResource("4_q1ipm")
+dry_fire_sound = ExtResource("5_ue3g7")
+shell_eject_sound = ExtResource("6_2yh8o")
+footstep_sound = ExtResource("7_cisnj")
+impact_sound = ExtResource("8_x436g")
+
+[node name="Mesh" type="MeshInstance3D" parent="." unique_id=2136789337]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+material_override = SubResource("StandardMaterial3D_iof21")
+cast_shadow = 3
+mesh = SubResource("CapsuleMesh_ucva2")
+
+[node name="Collider" type="CollisionShape3D" parent="." unique_id=292905467]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_iof21")
+
+[node name="Head" type="Node3D" parent="." unique_id=455995059]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, 0)
+
+[node name="瞄准视角" type="Camera3D" parent="Head" unique_id=1026204785]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.20303106, -0.22008997, -0.074887216)
+fov = 31.8
+
+[node name="主视角" type="Camera3D" parent="Head" unique_id=707140559]
+
+[node name="WallDetector" type="RayCast3D" parent="Head/主视角" unique_id=1517796798]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, -0.20164198, -0.17810023, -0.50139314)
+visible = false
+
+[node name="AimRay" type="RayCast3D" parent="Head/主视角" unique_id=1060656318]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -0.2016217, -0.4222803, -0.29165554)
+visible = false
+target_position = Vector3(0, 0.3, 0)
+collision_mask = 5
+collide_with_areas = true
+
+[node name="WeaponPivot" type="Node3D" parent="Head" unique_id=782073066]
+
+[node name="mcx" parent="Head/WeaponPivot" unique_id=1230436244 instance=ExtResource("2_wr06p")]
+transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, -0.20303106, -0.44041413, -0.685895)
+
+[node name="Muzzle" type="Marker3D" parent="Head/WeaponPivot/mcx" unique_id=661685710]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.10202056, 0.08289945, -2.9802322e-08)
+visible = false
+
+[node name="Flash" type="OmniLight3D" parent="Head/WeaponPivot/mcx/Muzzle" unique_id=1592453091]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0517696, 0.00078082085, -1.4901161e-08)
+visible = false
+light_color = Color(1, 0.8, 0.4, 1)
+light_energy = 2.0
+omni_range = 3.0
+
+[node name="Eject" type="Marker3D" parent="Head/WeaponPivot/mcx" unique_id=1215829316]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09720302, 0.092792094, 0.00070023537)
+
+[node name="glock" parent="Head/WeaponPivot" unique_id=370625574 instance=ExtResource("3_glock")]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, -0.203, -0.44, -0.4)
+visible = false
+
+[node name="Muzzle" type="Marker3D" parent="Head/WeaponPivot/glock" unique_id=1596799342]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.006612867, 0.2613119, -0.009910226)
+visible = false
+
+[node name="Flash" type="OmniLight3D" parent="Head/WeaponPivot/glock/Muzzle" unique_id=762039858]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.4986606e-05, 0.00019186735, 0.24874237)
+visible = false
+light_color = Color(1, 0.8, 0.4, 1)
+light_energy = 1.5
+omni_range = 2.0
+
+[node name="Eject" type="Marker3D" parent="Head/WeaponPivot/glock" unique_id=1681204906]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0017564595, 0.26118606, -0.0093203485)
+
+[node name="GunfireSound" type="AudioStreamPlayer3D" parent="." unique_id=427433087]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.20079911, 1.1226782, -0.6006961)
+max_distance = 50.0
+max_polyphony = 16
+
+[node name="ReloadSound" type="AudioStreamPlayer3D" parent="." unique_id=874106191]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.20127964, 0.9063125, -0.27350283)
+max_distance = 10.0
+
+[node name="DryFireSound" type="AudioStreamPlayer3D" parent="." unique_id=1951003611]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.2021929, 1.1227927, -0.39082128)
+volume_db = -12.0
+max_distance = 5.0
+
+[node name="ShellEjectSound" type="AudioStreamPlayer3D" parent="." unique_id=276625594]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, -0.5)
+volume_db = -10.0
+max_distance = 8.0
+max_polyphony = 8
+
+[node name="FootstepSound" type="AudioStreamPlayer" parent="." unique_id=141398857]
+volume_db = -5.0
+
+[node name="ImpactSound" type="AudioStreamPlayer3D" parent="." unique_id=1850498657]
+max_distance = 30.0
+max_polyphony = 8
+
+[node name="AvailableHitboxes" type="Node3D" parent="." unique_id=677881969]
+
+[node name="HeadHitbox" type="Area3D" parent="AvailableHitboxes" unique_id=1024179237]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2567217, 0)
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("9_hitbox")
+is_weak_spot = true
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="AvailableHitboxes/HeadHitbox" unique_id=2036711023]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.043278217, 0)
+shape = SubResource("SphereShape3D_head")
+
+[node name="BodyHitbox" type="Area3D" parent="AvailableHitboxes" unique_id=832824158]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("9_hitbox")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="AvailableHitboxes/BodyHitbox" unique_id=1293953601]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.21113282, 0)
+shape = SubResource("CapsuleShape3D_iof21")

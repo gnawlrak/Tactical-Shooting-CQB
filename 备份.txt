@@ -1,0 +1,3216 @@
+res://addons/proto_controller/Enemy.gd：
+extends CharacterBody3D
+
+class_name Enemy
+
+# Constants
+var SPEED_RUN = 5.0
+var SPEED_CROUCH = 2.5
+var SPEED_PRONE = 1.5
+const JUMP_VELOCITY = 4.5
+
+# Enums
+enum Stance { STANDING, CROUCHING, PRONE }
+enum State { IDLE, CHASE, ATTACK, SEARCH, RETREAT, DEFEND, SUPPRESS, FLANK, AMBUSH }
+enum EnemyRole { ASSAULT, SUPPORT, SNIPER, FLANKER }
+
+# Export Variables
+@export_group("Stats")
+@export var max_health : float = 100.0
+@export var accuracy : float = 0.01 # SIGNIFICANTLY buffed from 0.04
+@export var attack_range : float = 20.0
+@export var sight_range : float = 60.0 # buffed from 40
+@export var vision_fov : float = 90.0 # 视野角度（度）
+@export var awareness_speed : float = 2.0 # 发现玩家的速度
+@export var awareness_decay : float = 0.5 # 失去玩家后的警觉值降低速度
+@export var fire_rate : float = 0.1 # buffed from 0.15
+@export var damage_body : float = 35.0
+@export var damage_head : float = 100.0
+
+@onready var navigation_agent : NavigationAgent3D = $NavigationAgent3D
+@onready var head = $Head
+@onready var weapon_pivot = $Head/WeaponPivot
+@onready var ak47 = $Head/WeaponPivot/AK47
+@onready var raycast = $Head/WeaponPivot/AimRay
+@onready var wall_detector_left = $Head/WallDetectorLeft
+@onready var wall_detector_right = $Head/WallDetectorRight
+@onready var muzzle = $Head/WeaponPivot/AK47/Muzzle
+@onready var collision_shape = $CollisionShape3D
+@onready var visual_mesh = $MeshInstance3D
+@onready var shoot_sound = $ShootSound
+@onready var footstep_sound = $FootstepSound
+@onready var head_hitbox = $AvailableHitboxes/HeadHitbox
+@onready var body_hitbox = $AvailableHitboxes/BodyHitbox
+@onready var body_hitbox_shape = $AvailableHitboxes/BodyHitbox/CollisionShape3D
+
+# Runtime Variables
+var current_health : float
+var current_state : int = State.IDLE
+var current_stance : int = Stance.STANDING
+var target : Node3D = null
+var fire_cooldown : float = 0.0
+var stance_timer : float = 0.0
+var gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
+
+# Last known player info
+var last_known_pos : Vector3 = Vector3.ZERO
+var alerted : bool = false
+
+# Advanced AI Variables
+var current_cover : Marker3D = null
+var retreat_threshold : float = 40.0
+var last_hit_time : float = 0.0
+var hit_count_window : int = 0
+var ambush_timer : float = 0.0
+var strafe_dir : float = 0.0
+var strafe_timer : float = 0.0
+var is_rushing : bool = false
+var aim_shake : Vector2 = Vector2.ZERO
+var tracking_speed : float = 8.0 # Buffed from 4.0
+var suppression_timer : float = 0.0
+var flank_angle : float = 0.0
+var awareness : float = 0.0 # 当前对目标的警觉值 (0-1)
+var last_seen_pos : Vector3 = Vector3.ZERO # 最后一次亲眼看到玩家的位置
+var is_player_in_fov : bool = false # 当前帧玩家是否在视野内
+
+# Enhanced Decision System Variables
+var decision_timer : float = 0.0  # 决策计时器（避免频繁切换状态）
+var last_state_change_time : float = 0.0  # 上次状态切换时间
+var state_persistence : float = 2.0  # 状态持续最小时间（秒）
+var aggression_level : float = 0.5  # 攻击性 (0-1)
+var patience : float = 1.0  # 耐心值（影响追击和搜索时间）
+var threat_memory : Array = []  # 威胁记忆（记录被攻击的方向）
+var player_pattern : Dictionary = {}  # 玩家行为模式记录
+var last_player_velocity : Vector3 = Vector3.ZERO  # 上一帧玩家速度
+var player_movement_prediction : String = "unknown"  # 预测玩家移动：stationary/advancing/retreating/flanking
+
+# Guerrilla Tactics Variables
+var preferred_cover_positions : Array = []  # 偏好掩体位置列表
+var current_tactical_goal : String = "defend"  # 当前战术目标：defend/flank/relocate/ambush
+var exposure_time : float = 0.0  # 暴露时间（用于判断是否需要转移）
+var concealment_bonus : float = 0.0  # 隐蔽加成（利用地形减少被发现概率）
+var reposition_timer : float = 0.0  # 转移计时器
+var ambush_spot : Vector3 = Vector3.ZERO  # 埋伏点
+var is_in_stealth_mode : bool = false  # 是否处于隐蔽模式
+
+# Sound Perception System
+var last_sound_position : Vector3 = Vector3.ZERO  # 最后听到的声音位置
+var last_sound_time : float = 0.0  # 最后听到声音的时间
+var sound_confidence : float = 0.0  # 声音定位置信度（0-1）
+var hearing_range : float = 40.0  # 听力范围
+var investigation_timer : float = 0.0  # 调查计时器
+
+# Role System Variables
+var my_role : EnemyRole = EnemyRole.ASSAULT
+var role_assigned : bool = false
+var squad_leader : Node = null
+var squad_members : Array = []
+
+# Accuracy and Recoil System
+var recoil_accumulation : float = 0.0
+const RECOIL_DECAY : float = 2.0
+const MOVEMENT_ACCURACY_PENALTY : float = 0.5
+
+# Cover Evaluation Cache
+var cover_preference_score : Dictionary = {}
+var last_cover_eval_time : float = 0.0
+const COVER_EVAL_INTERVAL : float = 2.0
+
+# Stance Settings - 与玩家保持一致
+@export var standing_height : float = 1.3
+@export var crouching_height : float = 0.9
+@export var prone_height : float = 0.4
+var current_height = 1.3
+var lean_amount : float = 0.0
+var lean_speed : float = 5.0
+var lean_limit : float = 0.6
+
+# 爆头机制 - 小概率锁头
+@export var headshot_chance : float = 0.15  # 15% 概率锁头
+var is_targeting_head : bool = false
+
+# Burst Fire Variables
+var burst_count : int = 0
+var burst_max : int = 0
+var burst_pause : float = 0.0
+
+func _ready():
+	current_health = max_health
+	
+	# Initial setup
+	setup_nav()
+	
+	# Duplicate resources for unique instance modification
+	if visual_mesh and visual_mesh.mesh:
+		visual_mesh.mesh = visual_mesh.mesh.duplicate()
+	if collision_shape and collision_shape.shape:
+		collision_shape.shape = collision_shape.shape.duplicate()
+		# Sync body hitbox shape
+		if body_hitbox_shape:
+			body_hitbox_shape.shape = collision_shape.shape
+	# Find player
+	target = get_tree().get_first_node_in_group("player")
+	
+	# Default sound if none assigned
+	if shoot_sound and not shoot_sound.stream:
+		shoot_sound.stream = load("res://sounds/ttig34.mp3")
+		
+	# Prevent shooting self
+	if raycast:
+		raycast.add_exception(self)
+		# Ensure raycast points forward (negative Z) by default, now that we don't use look_at
+		raycast.target_position = Vector3(0, 0, -100)
+	
+	add_to_group("enemies")
+	
+	# Dynamic Difficulty Adjustment based on Threat Level
+	if get_node_or_null("/root/GlobalSave"):
+		var threat = get_node("/root/GlobalSave").threat_level
+		accuracy /= threat # Higher threat = smaller accuracy number = more precise
+		tracking_speed *= (0.8 + (threat * 0.4))
+		fire_rate *= (1.2 - (threat * 0.2))
+		print("Enemy: Difficulty adjusted by threat (", threat, "). Accuracy now: ", accuracy)
+	
+	# Role Assignment System
+	assign_role()
+	
+	# Squad System
+	await get_tree().create_timer(0.1).timeout  # Wait for other enemies to spawn
+	join_nearest_squad()
+	
+	# Guerrilla Tactics: Initialize tactical positions
+	initialize_tactical_positions()
+	
+	# Connect to global sound events
+	get_tree().root.connect("player_made_sound", _on_player_made_sound)
+
+func setup_nav():
+	# Configure navigation agent if needed
+	navigation_agent.path_desired_distance = 1.0
+	navigation_agent.target_desired_distance = 1.0
+
+func _physics_process(delta):
+	if current_health <= 0 or not is_inside_tree():
+		return
+	
+	# Gravity
+	if not is_on_floor():
+		velocity.y -= gravity * delta
+
+	# Perception Update
+	update_perception(delta)
+	update_sound_perception(delta)
+
+	# State Machine
+	match current_state:
+		State.IDLE:
+			process_idle(delta)
+		State.CHASE:
+			process_chase(delta)
+		State.ATTACK:
+			process_attack(delta)
+		State.RETREAT:
+			process_retreat(delta)
+		State.DEFEND:
+			process_defend(delta)
+		State.SEARCH:
+			process_search(delta)
+		State.SUPPRESS:
+			process_suppress(delta)
+		State.FLANK:
+			process_flank(delta)
+		State.AMBUSH:
+			process_ambush(delta)
+	
+	# Update player pattern analysis
+	update_player_pattern_analysis(delta)
+	
+	# Handle Stance Transition
+	handle_stance(delta)
+	
+	# Timers
+	if fire_cooldown > 0:
+		fire_cooldown -= delta
+	
+	# Recoil Decay
+	if recoil_accumulation > 0:
+		recoil_accumulation = max(0, recoil_accumulation - RECOIL_DECAY * delta)
+	
+	# Final velocity smoothing to prevent "teleporting"
+	# We use move_and_slide which uses velocity.
+	# The individual process functions should set velocity correctly.
+	if is_inside_tree():
+		move_and_slide()
+
+func process_idle(delta):
+	if not is_inside_tree(): return
+	# AI stay at post until alerted
+	if target:
+		var dist = global_position.distance_to(target.global_position)
+		
+		# 硬核模式：持续转头扫描玩家方向，不再延迟
+		if not alerted and dist < 100.0:  # 超远搜索范围
+			look_at_target(target.global_position, delta)
+		
+		if (dist < 100.0 and has_line_of_sight()) or alerted:  # 超远视野
+			# Player spotted or AI was attacked
+			print("Enemy ", name, ": Player spotted!")
+			
+			# 根据角色和距离选择初始状态
+			match my_role:
+				EnemyRole.SNIPER:
+					# 狙击手：优先选择埋伏或防守位置
+					if dist > 30.0:
+						change_state(State.AMBUSH)
+						ambush_timer = randf_range(5.0, 10.0)
+					else:
+						change_state(State.DEFEND)
+				EnemyRole.FLANKER:
+					# 侧翼手：尝试包抄
+					if dist > 15.0:
+						change_state(State.FLANK)
+						ambush_timer = randf_range(8.0, 12.0)
+					else:
+						change_state(State.ATTACK)
+				EnemyRole.SUPPORT:
+					# 支援手：选择压制或防守
+					if dist < 40.0:
+						change_state(State.SUPPRESS)
+						suppression_timer = randf_range(3.0, 6.0)
+					else:
+						change_state(State.DEFEND)
+				_:
+					# 突击手：根据距离选择
+					if dist < 20.0:
+						change_state(State.ATTACK)
+					else:
+						change_state(State.DEFEND)
+						ambush_timer = randf_range(3.0, 6.0)
+			
+			# 发现玩家时立即通知所有附近敌人
+			alert_nearby_enemies()
+	else:
+		# 未进入战斗时，主动选择有利的埋伏位置
+		update_ambush_position(delta)
+
+func process_chase(delta):
+	if not is_inside_tree(): return
+	if not target: return
+	
+	var dist = global_position.distance_to(target.global_position)
+	
+	# 智能状态转换
+	if dist < attack_range and has_line_of_sight():
+		# 根据玩家行为模式选择战术
+		match player_movement_prediction:
+			"stationary":
+				# 玩家静止，可能在瞄准，谨慎接近
+				if dist < 10.0:
+					change_state(State.DEFEND)
+				else:
+					change_state(State.ATTACK)
+			"retreating":
+				# 玩家后退，可以追击
+				change_state(State.ATTACK)
+			"flanking":
+				# 玩家在侧移，需要防御
+				change_state(State.DEFEND)
+			_:
+				change_state(State.ATTACK)
+		return
+	
+	# Do not chase directly into player's gun if not aggressive
+	if dist < 8.0:
+		change_state(State.DEFEND)
+		return
+	
+	# 根据角色选择追击策略
+	match my_role:
+		EnemyRole.FLANKER:
+			# 侧翼手：尝试包抄而不是直线追击
+			if flank_angle == 0:
+				flank_angle = randf_range(60, 120) * (1 if randf() > 0.5 else -1)
+			
+			var to_player = (target.global_position - global_position).normalized()
+			var flank_dir = to_player.rotated(Vector3.UP, deg_to_rad(flank_angle))
+			var flank_target = global_position + flank_dir * 10.0
+			
+			navigation_agent.target_position = flank_target
+		EnemyRole.SNIPER:
+			# 狙击手：不追击，选择防守位置
+			change_state(State.DEFEND)
+			return
+		_:
+			# 其他角色：游击战术推进
+			var next_cover = find_advance_cover()
+			if next_cover and not is_near_cover():
+				navigation_agent.target_position = next_cover.global_position
+				current_stance = Stance.CROUCHING  # 低姿态前进
+			else:
+				navigation_agent.target_position = target.global_position
+	
+	var next_path_pos = target.global_position 
+	if navigation_agent.is_target_reachable():
+		next_path_pos = navigation_agent.get_next_path_position()
+	
+	var dir = global_position.direction_to(next_path_pos)
+	dir.y = 0
+	dir = dir.normalized()
+	
+	# Flanking movement (for non-flanker roles)
+	if my_role != EnemyRole.FLANKER:
+		if flank_angle == 0:
+			flank_angle = randf_range(-30, 30)
+		
+		var flank_dir = dir.rotated(Vector3.UP, deg_to_rad(flank_angle))
+		velocity.x = cur_velocity_lerp(velocity.x, flank_dir.x * SPEED_RUN, delta)
+		velocity.z = cur_velocity_lerp(velocity.z, flank_dir.z * SPEED_RUN, delta)
+	else:
+		# 侧翼手直接移动
+		velocity.x = cur_velocity_lerp(velocity.x, dir.x * SPEED_RUN * 1.2, delta)
+		velocity.z = cur_velocity_lerp(velocity.z, dir.z * SPEED_RUN * 1.2, delta)
+	
+	look_at_target(next_path_pos, delta)
+	
+	# 游击战术：只在有掩体保护时射击
+	if (is_rushing or dist < 15.0) and has_line_of_sight() and is_near_cover():
+		if fire_cooldown <= 0:
+			shoot()
+
+# 寻找推进用的掩体（比当前位置更靠近玩家）
+func find_advance_cover() -> Marker3D:
+	var covers = get_tree().get_nodes_in_group("cover")
+	if covers.is_empty():
+		return null
+	
+	var best_cover = null
+	var best_score = -99999.0
+	
+	for c in covers:
+		if not c is Marker3D:
+			continue
+		
+		var dist_to_player = c.global_position.distance_to(target.global_position)
+		var dist_to_self = c.global_position.distance_to(global_position)
+		
+		# 只选择比当前位置更靠近玩家的掩体
+		if dist_to_player >= global_position.distance_to(target.global_position):
+			continue
+		
+		# 评分：距离玩家越近越好，但也要容易到达
+		var score = -dist_to_player * 0.3 - dist_to_self * 0.2
+		
+		if score > best_score:
+			best_score = score
+			best_cover = c
+	
+	return best_cover
+
+func process_retreat(delta):
+	if not is_inside_tree(): return
+	
+	# 根据角色选择撤退策略
+	match my_role:
+		EnemyRole.SNIPER:
+			# 狙击手：快速撤退到远距离位置
+			if not current_cover:
+				current_cover = find_best_cover()
+			
+			if current_cover:
+				navigation_agent.target_position = current_cover.global_position
+			else:
+				# 没有掩体，远离玩家
+				if target:
+					var escape_dir = target.global_position.direction_to(global_position)
+					var escape_pos = global_position + escape_dir * 20.0
+					navigation_agent.target_position = escape_pos
+		EnemyRole.FLANKER:
+			# 侧翼手：撤退时尝试侧移
+			if target:
+				var escape_dir = target.global_position.direction_to(global_position)
+				var flank_escape = escape_dir.rotated(Vector3.UP, deg_to_rad(45))
+				var escape_pos = global_position + flank_escape * 12.0
+				navigation_agent.target_position = escape_pos
+		_:
+			# 其他角色：标准撤退
+			if not current_cover:
+				current_cover = find_best_cover()
+			
+			if not current_cover:
+				if target:
+					var escape_dir = target.global_position.direction_to(global_position)
+					var escape_pos = global_position + escape_dir * 10.0
+					navigation_agent.target_position = escape_pos
+				else:
+					change_state(State.DEFEND)
+					return
+			else:
+				navigation_agent.target_position = current_cover.global_position
+
+	if navigation_agent.is_target_reached():
+		# 到达掩体后，根据血量和角色选择下一步
+		var health_percent = current_health / max_health
+		
+		match my_role:
+			EnemyRole.SNIPER:
+				# 狙击手：保持防守
+				change_state(State.DEFEND)
+				ambush_timer = randf_range(8.0, 15.0)
+			EnemyRole.SUPPORT:
+				# 支援手：血量恢复后压制
+				if health_percent > 0.6:
+					change_state(State.SUPPRESS)
+					suppression_timer = randf_range(3.0, 6.0)
+				else:
+					change_state(State.DEFEND)
+					ambush_timer = randf_range(5.0, 10.0)
+			_:
+				# 其他角色：根据血量决定
+				if health_percent > 0.5:
+					change_state(State.ATTACK)
+				else:
+					change_state(State.DEFEND)
+					ambush_timer = randf_range(5.0, 10.0)
+		
+		current_cover = null
+		return
+
+	var next_path_pos = navigation_agent.get_next_path_position()
+	var dir = global_position.direction_to(next_path_pos)
+	dir.y = 0
+	dir = dir.normalized()
+	
+	# 游击战术：撤退时也利用掩体，降低姿态
+	current_stance = Stance.CROUCHING
+	velocity.x = cur_velocity_lerp(velocity.x, dir.x * SPEED_RUN, delta)
+	velocity.z = cur_velocity_lerp(velocity.z, dir.z * SPEED_RUN, delta)
+	
+	# 撤退时偶尔回头看
+	if randf() < 0.1:
+		look_at_target(target.global_position if target else last_seen_pos, delta * 2.0)
+	else:
+		look_at_target(next_path_pos, delta)
+
+func process_defend(delta):
+	if not is_inside_tree(): return
+	if not target:
+		change_state(State.IDLE)
+		return
+	
+	# 游击战术：评估暴露风险
+	exposure_time += delta
+	var risk = evaluate_exposure_risk()
+	
+	# 高风险时主动转移位置
+	if risk > 50.0 and reposition_timer <= 0:
+		perform_tactical_relocation()
+		reposition_timer = randf_range(3.0, 6.0)  # 3-6 秒后重新评估
+		print("Enemy ", name, ": Too exposed! Relocating to safer position!")
+		return
+	
+	if reposition_timer > 0:
+		reposition_timer -= delta
+	
+	# 防守时优先寻找掩体
+	if not current_cover or not is_near_cover():
+		current_cover = find_best_cover()
+		if current_cover:
+			navigation_agent.target_position = current_cover.global_position
+			# 移动到掩体时保持低姿态
+			current_stance = Stance.CROUCHING
+			velocity.x = move_toward(velocity.x, 0, delta * 10.0)
+			velocity.z = move_toward(velocity.z, 0, delta * 10.0)
+			return
+	
+	# 在掩体后采用蹲姿或匍匐姿
+	current_stance = Stance.CROUCHING if current_cover else Stance.PRONE
+	velocity.x = move_toward(velocity.x, 0, delta * 10.0)
+	velocity.z = move_toward(velocity.z, 0, delta * 10.0)
+	
+	# 战术窥视与侧身逻辑
+	if is_near_cover():
+		handle_tactical_peeking(delta)
+	else:
+		look_at_target(target.global_position, delta * 5.0)
+	
+	process_leaning(delta)
+	
+	# 射击逻辑集约化
+	if has_line_of_sight():
+		process_combat_firing(delta)
+	
+	ambush_timer -= delta
+	
+	# 防守状态切换逻辑
+	var dist = global_position.distance_to(target.global_position)
+	if ambush_timer <= 0:
+		# 根据角色和距离选择下一步行动
+		match my_role:
+			EnemyRole.SNIPER:
+				# 狙击手：保持防守，除非玩家太近
+				if dist < 15.0:
+					change_state(State.RETREAT)
+				else:
+					ambush_timer = randf_range(5.0, 10.0)
+			EnemyRole.SUPPORT:
+				# 支援手：有机会就压制
+				if dist < 40.0 and has_line_of_sight():
+					if randf() < 0.4:
+						change_state(State.SUPPRESS)
+						suppression_timer = randf_range(3.0, 5.0)
+					else:
+						ambush_timer = randf_range(3.0, 6.0)
+				else:
+					ambush_timer = randf_range(3.0, 6.0)
+			EnemyRole.FLANKER:
+				# 侧翼手：防守后尝试包抄
+				if randf() < 0.3:
+					change_state(State.FLANK)
+					ambush_timer = randf_range(5.0, 8.0)
+				else:
+					ambush_timer = randf_range(3.0, 6.0)
+			_:
+				# 突击手：根据距离和随机性选择
+				if dist > 15.0:
+					if randf() < 0.8:
+						ambush_timer = randf_range(3.0, 6.0)
+					else:
+						change_state(State.CHASE)
+						current_cover = null
+				elif dist < 6.0:
+					# 玩家太近，主动出击
+					change_state(State.ATTACK)
+					current_cover = null
+				else:
+					ambush_timer = randf_range(3.0, 6.0)
+	elif dist < 6.0:
+		# 玩家太近，主动出击
+		change_state(State.ATTACK)
+		current_cover = null
+
+# 新增：搜索状态逻辑
+func process_search(delta):
+	if not is_inside_tree(): return
+	
+	# 根据角色调整搜索策略
+	match my_role:
+		EnemyRole.SNIPER:
+			# 狙击手：不主动搜索，选择防守位置监视
+			change_state(State.DEFEND)
+			return
+		EnemyRole.FLANKER:
+			# 侧翼手：搜索时尝试侧翼接近
+			if flank_angle == 0:
+				flank_angle = randf_range(45, 90) * (1 if randf() > 0.5 else -1)
+			
+			var to_last_pos = (last_known_pos - global_position).normalized()
+			var search_dir = to_last_pos.rotated(Vector3.UP, deg_to_rad(flank_angle))
+			var search_target = last_known_pos - search_dir * 8.0
+			
+			navigation_agent.target_position = search_target
+		_:
+			# 其他角色：标准搜索
+			if navigation_agent.target_position != last_known_pos:
+				navigation_agent.target_position = last_known_pos
+		
+	if navigation_agent.is_target_reached():
+		# 到达后根据角色观察四周
+		investigation_timer -= delta
+		
+		match my_role:
+			EnemyRole.SUPPORT:
+				# 支援手：缓慢扫视
+				look_at_target(last_known_pos + Vector3(randf_range(-8, 8), 0, randf_range(-8, 8)), delta * 1.5)
+			_:
+				# 其他角色：正常扫视
+				look_at_target(last_known_pos + Vector3(randf_range(-5, 5), 0, randf_range(-5, 5)), delta * 2.0)
+		
+		if investigation_timer <= 0:
+			# 搜索无果，根据角色选择下一步
+			match my_role:
+				EnemyRole.ASSAULT:
+					# 突击手：可能继续搜索或返回
+					if randf() < 0.6:
+						change_state(State.IDLE)
+						alerted = false
+						awareness = 0.0
+					else:
+						# 重新选择搜索点
+						last_known_pos = last_known_pos + Vector3(randf_range(-10, 10), 0, randf_range(-10, 10))
+						investigation_timer = randf_range(5.0, 10.0)
+				EnemyRole.SUPPORT:
+					# 支援手：转为防守
+					change_state(State.DEFEND)
+					ambush_timer = randf_range(5.0, 10.0)
+				_:
+					change_state(State.IDLE)
+					alerted = false
+					awareness = 0.0
+			return
+	else:
+		# 搜索过程中保持警惕
+		current_stance = Stance.CROUCHING
+		var next_path_pos = navigation_agent.get_next_path_position()
+		var dir = global_position.direction_to(next_path_pos)
+		dir.y = 0
+		velocity.x = cur_velocity_lerp(velocity.x, dir.x * SPEED_CROUCH, delta)
+		velocity.z = cur_velocity_lerp(velocity.z, dir.z * SPEED_CROUCH, delta)
+		look_at_target(next_path_pos, delta)
+		
+	# 搜索时如果看到玩家，立即进入攻击状态
+	if has_line_of_sight():
+		change_state(State.ATTACK)
+
+func process_attack(delta):
+	if not is_inside_tree() or not target: return
+	
+	var dist = global_position.distance_to(target.global_position)
+	var has_los = has_line_of_sight()
+	
+	# 评估风险
+	exposure_time += delta
+	var risk = evaluate_exposure_risk()
+	
+	# 高风险时根据角色选择应对策略
+	if risk > 70.0:
+		match my_role:
+			EnemyRole.ASSAULT:
+				# 突击手：血量低时撤退，否则硬刚
+				if current_health < max_health * 0.4:
+					change_state(State.RETREAT)
+				else:
+					perform_tactical_relocation()
+			EnemyRole.SUPPORT:
+				# 支援手：转为压制
+				change_state(State.SUPPRESS)
+				suppression_timer = randf_range(2.0, 4.0)
+			EnemyRole.SNIPER:
+				# 狙击手：立即转移
+				change_state(State.RETREAT)
+			EnemyRole.FLANKER:
+				# 侧翼手：重新包抄
+				change_state(State.FLANK)
+				ambush_timer = randf_range(5.0, 8.0)
+		return
+
+	if not has_los:
+		# 根据角色选择失去视线后的反应
+		match my_role:
+			EnemyRole.SUPPORT:
+				# 支援手：压制射击
+				if awareness > 0.3:
+					change_state(State.SUPPRESS)
+					suppression_timer = randf_range(3.0, 5.0)
+				else:
+					change_state(State.SEARCH)
+			EnemyRole.SNIPER:
+				# 狙击手：耐心等待
+				if dist < 20.0:
+					change_state(State.SEARCH)
+				else:
+					change_state(State.DEFEND)
+			_:
+				# 其他角色：根据耐心值决定
+				if awareness > 0.5 and patience > 0.3:
+					process_suppression(delta)
+				else:
+					change_state(State.CHASE)
+		return
+	
+	# 正常攻击：保持距离并射击
+	if dist > attack_range * 1.5:
+		change_state(State.CHASE)
+		return
+	
+	# 根据玩家行为调整攻击策略
+	match player_movement_prediction:
+		"stationary":
+			# 玩家静止，可能是狙击手，谨慎攻击
+			if dist < 15.0:
+				process_tactical_movement(delta)
+			else:
+				# 中远距离保持位置射击
+				velocity.x = move_toward(velocity.x, 0, delta * 10.0)
+				velocity.z = move_toward(velocity.z, 0, delta * 10.0)
+		"flanking":
+			# 玩家在侧移，预测位置射击
+			process_tactical_movement(delta)
+		"retreating":
+			# 玩家后退，可以追击
+			if dist > 10.0:
+				var dir = global_position.direction_to(target.global_position)
+				dir.y = 0
+				velocity.x = cur_velocity_lerp(velocity.x, dir.x * SPEED_CROUCH, delta)
+				velocity.z = cur_velocity_lerp(velocity.z, dir.z * SPEED_CROUCH, delta)
+		_:
+			process_tactical_movement(delta)
+	
+	# 瞄准与射击
+	look_at_target(target.global_position, delta * 8.0)
+	process_leaning(delta)
+	process_combat_firing(delta)
+	
+	# 攻击时间过长，考虑改变策略
+	ambush_timer -= delta
+	if ambush_timer <= 0:
+		# 根据角色选择下一步行动
+		match my_role:
+			EnemyRole.FLANKER:
+				# 侧翼手：重新包抄
+				change_state(State.FLANK)
+				ambush_timer = randf_range(5.0, 8.0)
+			EnemyRole.SUPPORT:
+				# 支援手：转为压制
+				if randf() < 0.6:
+					change_state(State.SUPPRESS)
+					suppression_timer = randf_range(3.0, 5.0)
+				else:
+					ambush_timer = randf_range(3.0, 5.0)
+			_:
+				# 其他角色：继续攻击或寻找掩体
+				if randf() < 0.7:
+					ambush_timer = randf_range(3.0, 5.0)
+				else:
+					change_state(State.DEFEND)
+
+# 新增：战术移动（侧移 + 掩体倾向）
+func process_tactical_movement(delta):
+	strafe_timer -= delta
+	if strafe_timer <= 0:
+		strafe_timer = randf_range(1.0, 3.0)
+		strafe_dir = 1.0 if randf() > 0.5 else -1.0
+	
+	var move_dir = Vector3.ZERO
+	# 左右侧移
+	move_dir += global_transform.basis.x * strafe_dir
+	
+	# 倾向于靠近掩体
+	if not current_cover or not is_near_cover():
+		var cover = find_best_cover()
+		if cover:
+			move_dir += global_position.direction_to(cover.global_position) * 0.5
+	
+	velocity.x = cur_velocity_lerp(velocity.x, move_dir.x * SPEED_CROUCH, delta)
+	velocity.z = cur_velocity_lerp(velocity.z, move_dir.z * SPEED_CROUCH, delta)
+
+# 新增：战斗射击逻辑（整合不同距离的逻辑）
+func process_combat_firing(delta):
+	if fire_cooldown > 0: return
+	if burst_pause > 0:
+		burst_pause -= delta
+		return
+		
+	var dist = global_position.distance_to(target.global_position)
+	
+	# 根据角色和距离调整射击策略
+	if burst_count <= 0:
+		match my_role:
+			EnemyRole.SNIPER:
+				# 狙击手：单发精确射击
+				burst_count = 1
+				burst_pause = randf_range(1.5, 3.0)  # 长时间瞄准
+			EnemyRole.SUPPORT:
+				# 支援手：持续压制
+				if dist < 30.0:
+					burst_count = randi_range(8, 15)
+					burst_pause = randf_range(0.2, 0.4)
+				else:
+					burst_count = randi_range(4, 8)
+					burst_pause = randf_range(0.5, 1.0)
+			EnemyRole.FLANKER:
+				# 侧翼手：快速短点射
+				burst_count = randi_range(2, 4)
+				burst_pause = randf_range(0.3, 0.6)
+			_:
+				# 突击手：根据距离调整
+				if dist < 15.0:
+					burst_count = randi_range(6, 12)
+					burst_pause = 0.1
+				elif dist < 40.0:
+					burst_count = randi_range(3, 6)
+					burst_pause = randf_range(0.4, 0.8)
+				else:
+					burst_count = randi_range(1, 3)
+					burst_pause = randf_range(1.0, 2.0)
+	
+	# 根据玩家行为调整射击时机
+	match player_movement_prediction:
+		"stationary":
+			# 玩家静止，可以精确射击
+			shoot()
+		"flanking":
+			# 玩家在侧移，需要预判
+			if burst_count <= 3:  # 只在短点射时射击
+				shoot()
+		"advancing":
+			# 玩家接近，需要压制
+			shoot()
+		"retreating":
+			# 玩家后退，可以节省弹药
+			if randf() < 0.7:
+				shoot()
+		_:
+			shoot()
+	
+	burst_count -= 1
+	
+	# 射击后的战术动作：如果在掩体后，射击完可能缩回
+	if burst_count <= 0 and is_near_cover():
+		burst_pause += randf_range(0.2, 0.5) # 增加躲避时间
+		if current_cover:
+			var cover_dir = (current_cover.global_position - global_position).normalized()
+			velocity.x = cover_dir.x * SPEED_CROUCH * 0.5
+			velocity.z = cover_dir.z * SPEED_CROUCH * 0.5
+
+# 新增：压制射击
+func process_suppression(delta):
+	look_at_target(last_seen_pos, delta * 5.0)
+	
+	if fire_cooldown <= 0:
+		# 向最后位置添加随机偏移进行压制
+		shoot()
+		fire_cooldown = fire_rate * 2.5 # 压制射速稍慢
+
+# 新增：战术窥视（Peek/Hide）
+func handle_tactical_peeking(delta):
+	# 每隔一段时间切换窥视状态
+	if Time.get_ticks_msec() / 1000.0 - last_hit_time < 2.0:
+		# 如果刚被打，躲起来
+		current_stance = Stance.CROUCHING 
+	else:
+		# 没被打，尝试窥视射击
+		current_stance = Stance.STANDING if randf() > 0.3 else Stance.CROUCHING
+
+func get_target_head_pos() -> Vector3:
+	if not target: return global_position # Fallback
+	
+	# 获取目标高度（兼容敌人和玩家）
+	var target_h = 1.3
+	if "current_height" in target:
+		target_h = target.current_height
+	elif "stance_height" in target:
+		target_h = target.stance_height
+	
+	# 计算头部位置（头顶下方 0.15m）
+	var head_offset = target_h - 0.15
+	
+	return target.global_position + Vector3(0, head_offset, 0)
+
+# ==================== ADVANCED TARGETING SYSTEM ====================
+
+# 智能提前量预测系统
+func predict_target_position(target_node: Node3D, bullet_travel_time: float) -> Vector3:
+	if not target_node:
+		return global_position
+	
+	if not target_node is CharacterBody3D:
+		return target_node.global_position
+	
+	var base_pos = target_node.global_position
+	var velocity = target_node.velocity
+	
+	# 1. 基础线性预测
+	var predicted_pos = base_pos + velocity * bullet_travel_time
+	
+	# 2. 检测前方障碍物（目标可能转向）
+	var space_state = get_world_3d().direct_space_state
+	var forward_dist = 3.0
+	var query = PhysicsRayQueryParameters3D.create(
+		base_pos,
+		base_pos + velocity.normalized() * forward_dist
+	)
+	query.exclude = [self, target_node]
+	query.collision_mask = 1  # 只检测静态物体
+	var result = space_state.intersect_ray(query)
+	
+	if result:  # 前方有障碍，目标可能转向
+		# 预测转向后的位置（假设 90 度转向）
+		# 手动计算垂直向量：交换 X 和 Z 分量并取反其中一个
+		var vel_norm = velocity.normalized()
+		var turn_dir = Vector3(-vel_norm.z, 0, vel_norm.x).normalized()
+		
+		# 随机选择左转或右转
+		if randf() > 0.5:
+			turn_dir = -turn_dir
+		
+		var turn_speed = velocity.length() * 0.5  # 转向后速度减半
+		predicted_pos = base_pos + turn_dir * turn_speed * bullet_travel_time
+	
+	# 3. 根据距离增加不确定性（模拟人类预判误差）
+	var dist = global_position.distance_to(base_pos)
+	var uncertainty = 0.0
+	
+	if dist > 30.0:
+		uncertainty = dist * 0.01  # 远距离 1% 的不确定性
+	elif dist > 15.0:
+		uncertainty = dist * 0.005  # 中距离 0.5% 的不确定性
+	
+	if uncertainty > 0:
+		predicted_pos += Vector3(
+			randf_range(-uncertainty, uncertainty),
+			0,
+			randf_range(-uncertainty, uncertainty)
+		)
+	
+	# 4. 考虑重力下坠（远距离射击）
+	if dist > 20.0:
+		var gravity_drop = 0.5 * 9.8 * pow(bullet_travel_time, 2)
+		predicted_pos.y += gravity_drop * 0.5  # 稍微抬高瞄准点
+	
+	return predicted_pos
+
+# 动态精度计算系统
+func get_current_accuracy() -> float:
+	var base_acc = accuracy
+	
+	# 1. 姿态修正 (优化：更准)
+	match current_stance:
+		Stance.PRONE:
+			base_acc *= 0.3  # 匍匐极准
+		Stance.CROUCHING:
+			base_acc *= 0.6  # 蹲姿很准
+		Stance.STANDING:
+			base_acc *= 0.9  # 站立正常
+	
+	# 2. 移动状态修正 (优化：减少惩罚)
+	if velocity.length() > 0.5:
+		base_acc *= (1.0 + MOVEMENT_ACCURACY_PENALTY * 0.5)
+	
+	# 3. 后坐力累积修正 (优化：减少影响)
+	base_acc *= (1.0 + recoil_accumulation * 0.02) # 原为 0.1
+	
+	# 4. 冲锋模式修正
+	if is_rushing:
+		base_acc *= 1.2  # 冲锋时精度稍微降低，原 1.5
+	
+	# 5. 角色修正
+	match my_role:
+		EnemyRole.SNIPER:
+			base_acc *= 0.2  # 狙击手精度极高
+		EnemyRole.SUPPORT:
+			base_acc *= 0.7  # 支援手精度较高
+	
+	return base_acc
+
+func shoot():
+	fire_cooldown = fire_rate
+	if shoot_sound:
+		shoot_sound.pitch_scale = randf_range(0.9, 1.1)
+		shoot_sound.play()
+		
+	if raycast and target and is_inside_tree() and target.is_inside_tree():
+		# 每次射击前随机决定是否锁头
+		is_targeting_head = randf() < headshot_chance
+		
+		# 根据姿态和距离选择瞄准点
+		var target_pos = get_target_head_pos()
+		var dist = global_position.distance_to(target.global_position)
+		
+		# 获取目标当前高度（兼容敌人和玩家）
+		var target_h = 1.3  # 默认站立高度
+		if "current_height" in target:
+			target_h = target.current_height
+		elif "stance_height" in target:
+			target_h = target.stance_height
+		
+		# 如果触发锁头，直接瞄准头部
+		if is_targeting_head:
+			target_pos = get_target_head_pos()
+		else:
+			# 不锁头时，根据距离选择瞄准点
+			if dist > 15.0:
+				# 远距离瞄准身体中心（更大的目标）
+				target_pos = target.global_position + Vector3(0, target_h * 0.5, 0)
+		
+		var final_accuracy = get_current_accuracy()
+		
+		if is_rushing:
+			final_accuracy *= 0.2
+			# 冲锋时瞄准胸部
+			target_pos = target.global_position + Vector3(0, target_h * 0.6, 0)
+		
+		# DYNAMIC HARD LOCK WITH KD-BASED OFFSET
+		var threat_level = 1.0
+		if get_node_or_null("/root/GlobalSave"):
+			threat_level = get_node("/root/GlobalSave").threat_level
+			
+		# Lock-on quality: Higher threat -> Smaller miss radius (优化：显著减小散布半径)
+		var miss_radius = clamp(1.0 - (threat_level * 0.5), 0.05, 1.0) # 原: clamp(2.0 - (threat_level * 0.8), 0.1, 2.0)
+		
+		if is_rushing:
+			miss_radius *= 0.5 # Rushing enemies are more accurate
+		
+		# 如果锁头，完全消除散布
+		if is_targeting_head:
+			miss_radius = 0.0  # 零散布！
+		
+		# Apply accuracy spread（使用动态精度）(优化：减少 accuracy_modifier 的乘数)
+		miss_radius += final_accuracy * 50.0 # 原: 100.0
+		
+		# Generate random offset
+		var aim_error = Vector3(
+			randf_range(-1, 1),
+			randf_range(-1, 1),
+			randf_range(-1, 1)
+		).normalized() * (randf() * miss_radius)
+		
+		var final_aim_pos = target_pos + aim_error
+		
+		# 使用 look_at 设置射线方向（原来的逻辑）
+		raycast.look_at(final_aim_pos)
+		
+		# Small procedural recoil on top
+		raycast.rotation.x += randf_range(-0.01, 0.01)
+		raycast.rotation.y += randf_range(-0.01, 0.01)
+		
+		raycast.force_raycast_update()
+		
+		if raycast.is_colliding():
+			var collider = raycast.get_collider()
+			var hit_point = raycast.get_collision_point()
+			
+			# 检测是否命中头部 - 多层检测确保准确
+			var is_headshot = false
+			var check_node = collider
+			
+			# 方法 1：直接检查节点名
+			if check_node is Area3D and ("HeadHitbox" in check_node.name or "Head" in check_node.name):
+				is_headshot = true
+				
+			# 方法 2：检查 Hitbox 属性
+			if not is_headshot and check_node.has_method("hit") and "is_weak_spot" in check_node:
+				is_headshot = check_node.is_weak_spot
+				
+			# 方法 3：向上查找父节点
+			if not is_headshot:
+				while check_node:
+					if "HeadHitbox" in check_node.name or "Head" in check_node.name:
+						is_headshot = true
+						break
+					if check_node.has_method("hit") and "is_weak_spot" in check_node:
+						if check_node.is_weak_spot:
+							is_headshot = true
+							break
+					check_node = check_node.get_parent()
+			
+			# 根据命中部位造成伤害
+			var damage_to_deal = damage_head if is_headshot else damage_body
+			if collider.has_method("hit"):
+				collider.hit(damage_to_deal, is_headshot)
+			elif collider.is_in_group("player"):
+				if collider.has_method("hit"):
+					collider.hit(damage_to_deal, is_headshot)
+			
+			spawn_impact(hit_point, raycast.get_collision_normal())
+		
+		# Reset not needed as we override rotation every frame
+		raycast.rotation = Vector3.ZERO 
+
+func spawn_impact(pos, normal):
+	pass
+
+# ==================== GUERRILLA TACTICS SYSTEM ====================
+
+# 初始化战术位置
+func initialize_tactical_positions():
+	# 收集所有掩体作为潜在的战术位置
+	var covers = get_tree().get_nodes_in_group("cover")
+	for c in covers:
+		if c is Marker3D:
+			preferred_cover_positions.append(c.global_position)
+
+# 评估当前位置的暴露风险
+func evaluate_exposure_risk() -> float:
+	var risk = 0.0
+	
+	if not target:
+		return risk
+	
+	# 1. 距离玩家越近，风险越高
+	var dist = global_position.distance_to(target.global_position)
+	if dist < 15.0:
+		risk += 30.0
+	elif dist < 30.0:
+		risk += 15.0
+	
+	# 2. 是否在开阔地带
+	if not is_near_cover():
+		risk += 40.0
+	
+	# 3. 是否被多个敌人看到（交叉火力）
+	var ally_count = count_allies_with_los()
+	if ally_count >= 2:
+		risk += 20.0  # 队友在看着你，相对安全
+	
+	# 4. 连续暴露时间
+	risk += exposure_time * 2.0
+	
+	return risk
+
+# 检查是否在掩体附近
+func is_near_cover() -> bool:
+	var covers = get_tree().get_nodes_in_group("cover")
+	for c in covers:
+		if c is Marker3D:
+			var dist = global_position.distance_to(c.global_position)
+			if dist < 3.0:
+				return true
+	return false
+
+# 统计有多少队友有视线
+func count_allies_with_los() -> int:
+	var count = 0
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	for e in enemies:
+		if e != self and is_instance_valid(e) and e.has_method("has_line_of_sight"):
+			if e.has_line_of_sight():
+				count += 1
+	return count
+
+# 选择最佳的游击战术位置
+func select_guerrilla_position() -> Vector3:
+	if preferred_cover_positions.is_empty():
+		return global_position
+	
+	var best_pos = global_position
+	var best_score = -99999.0
+	
+	for pos in preferred_cover_positions:
+		var score = 0.0
+		var dist_to_target = pos.distance_to(target.global_position if target else Vector3.ZERO)
+		var dist_to_current = pos.distance_to(global_position)
+		
+		# 1. 偏好中等距离（太近太危险，太远没威胁）
+		if dist_to_target > 20.0 and dist_to_target < 40.0:
+			score += 30.0
+		elif dist_to_target > 15.0 and dist_to_target <= 20.0:
+			score += 15.0
+		
+		# 2. 偏好容易到达的位置
+		score -= dist_to_current * 0.5
+		
+		# 3. 偏好有其他掩体的区域（便于转移）
+		score += count_nearby_covers(pos, 5.0) * 10.0
+		
+		# 4. 避免与其他敌人重叠
+		if count_enemies_near_position(pos, 8.0) == 0:
+			score += 20.0
+		
+		if score > best_score:
+			best_score = score
+			best_pos = pos
+	
+	return best_pos
+
+# 统计某位置附近的掩体数量
+func count_nearby_covers(pos: Vector3, radius: float) -> int:
+	var count = 0
+	for cover_pos in preferred_cover_positions:
+		if cover_pos.distance_to(pos) < radius:
+			count += 1
+	return count
+
+# 统计某位置附近的敌人数量
+func count_enemies_near_position(pos: Vector3, radius: float) -> int:
+	var count = 0
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	for e in enemies:
+		if is_instance_valid(e) and e.global_position.distance_to(pos) < radius:
+			count += 1
+	return count
+
+# 执行战术转移
+func perform_tactical_relocation():
+	if not target:
+		return
+	
+	var new_pos = select_guerrilla_position()
+	
+	# 规划转移路径（利用掩体）
+	navigation_agent.target_position = new_pos
+	
+	# 转移时保持低姿态
+	current_stance = Stance.CROUCHING
+	
+	# 设置隐蔽模式
+	is_in_stealth_mode = true
+	
+	print("Enemy ", name, ": Relocating to tactical position!")
+
+# 选择埋伏点
+func select_ambush_position() -> Vector3:
+	if not target:
+		return global_position
+	
+	# 寻找玩家行进路线上的掩体
+	var predict_pos = target.global_position + target.velocity * 2.0
+	
+	for pos in preferred_cover_positions:
+		var dist = pos.distance_to(predict_pos)
+		if dist > 10.0 and dist < 25.0:
+			# 检查是否有良好的射界
+			if has_good_firing_angle(pos):
+				return pos
+	
+	return global_position
+
+# 检查某个位置是否有良好的射界
+func has_good_firing_angle(pos: Vector3) -> bool:
+	if not target:
+		return false
+	
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(
+		pos + Vector3(0, 1.0, 0),
+		target.global_position + Vector3(0, 1.0, 0)
+	)
+	query.exclude = [self]
+	var result = space_state.intersect_ray(query)
+	
+	# 没有遮挡就是好位置
+	return result == null
+
+# 更新埋伏位置（IDLE 状态使用）
+func update_ambush_position(delta):
+	if not target or preferred_cover_positions.is_empty():
+		return
+	
+	# 定期更新埋伏点
+	reposition_timer -= delta
+	if reposition_timer <= 0:
+		ambush_spot = select_ambush_position()
+		reposition_timer = randf_range(5.0, 10.0)
+		
+		# 移动到埋伏点
+		if ambush_spot != global_position:
+			navigation_agent.target_position = ambush_spot
+			current_stance = Stance.CROUCHING  # 低姿态移动
+			is_in_stealth_mode = true
+			print("Enemy ", name, ": Moving to ambush position!")
+
+# ==================== SOUND PERCEPTION SYSTEM ====================
+
+# 玩家发出声音时的响应（脚步、枪声等）
+func _on_player_made_sound(position: Vector3, sound_type: String, volume: float):
+	if not is_inside_tree():
+		return
+	
+	var dist = global_position.distance_to(position)
+	
+	# 根据声音类型和距离计算可听度
+	var hearable = false
+	match sound_type:
+		"footstep":
+			hearable = dist < hearing_range * (1.0 if current_stance == Stance.PRONE else 0.7)
+		"gunshot":
+			hearable = dist < hearing_range * 2.0  # 枪声传得更远
+		"reload":
+			hearable = dist < hearing_range * 0.8
+		"landed":
+			hearable = dist < hearing_range * 1.5
+	
+	if hearable:
+		# 计算置信度（距离越近越准确）
+		var confidence = 1.0 - (dist / hearing_range)
+		on_hear_sound(position, sound_type, confidence)
+
+# 听到声音后的处理
+func on_hear_sound(position: Vector3, sound_type: String, confidence: float):
+	last_sound_position = position
+	last_sound_time = Time.get_ticks_msec() / 1000.0
+	sound_confidence = confidence
+	
+	print("Enemy ", name, ": Heard ", sound_type, " with confidence ", confidence)
+	
+	# 根据声音类型采取不同响应
+	match sound_type:
+		"gunshot", "explosion":
+			# 听到枪声或爆炸声，警觉性大幅度提高
+			var dist = global_position.distance_to(position)
+			awareness = max(awareness, 0.8 if dist < hearing_range else 0.5)
+			last_known_pos = position
+			
+			if current_state == State.IDLE or current_state == State.SEARCH:
+				current_state = State.SEARCH
+				investigation_timer = randf_range(8.0, 15.0)
+				navigation_agent.target_position = position
+				# 通知其他敌人
+				alert_nearby_enemies()
+		
+		"footstep", "landed":
+			# 听到脚步声，增加基础警觉
+			var dist = global_position.distance_to(position)
+			if dist < hearing_range:
+				awareness = max(awareness, 0.35)
+				last_known_pos = position
+				
+				if current_state == State.IDLE:
+					current_state = State.SEARCH
+					investigation_timer = randf_range(4.0, 8.0)
+					navigation_agent.target_position = position
+					# 朝声音方向看去
+					look_at_target(position, 0.5)
+		
+		"reload":
+			# 听到换弹声，保持防守姿态，不轻易进攻
+			var dist_to_sound = global_position.distance_to(position)
+			if current_state == State.DEFEND and dist_to_sound < 10.0 and randf() < 0.3:
+				# 只有 30% 概率且距离非常近才进攻
+				print("Enemy ", name, ": Player reloading! But staying in cover.")
+				# 大部分情况选择继续防守，提高警觉
+				fire_rate *= 0.9  # 稍微提高射速准备压制
+
+# 更新声音感知
+func update_sound_perception(delta):
+	if last_sound_time > 0:
+		var time_since_sound = (Time.get_ticks_msec() / 1000.0) - last_sound_time
+		
+		# 置信度随时间衰减
+		sound_confidence = max(0, sound_confidence - delta * 0.2)
+		
+		# 超过 5 秒未确认的声音忽略
+		if time_since_sound > 5.0:
+			last_sound_time = 0.0
+			sound_confidence = 0.0
+
+# 根据声音信息预判玩家位置并架枪
+func predict_and_hold_angle():
+	if sound_confidence < 0.3 or not target:
+		return null
+	
+	# 基于最后听到的声音位置预测玩家可能的移动方向
+	var predict_dir = (target.global_position - last_sound_position).normalized()
+	var predict_dist = 10.0  # 预测 10 米内的位置
+	
+	# 选择一个能覆盖该区域的掩体
+	var covers = get_tree().get_nodes_in_group("cover")
+	var best_cover = null
+	var best_score = -99999.0
+	
+	for c in covers:
+		if not c is Marker3D:
+			continue
+		
+		var cover_pos = c.global_position
+		var to_predict = (last_sound_position + predict_dir * predict_dist - cover_pos).normalized()
+		
+		# 评分标准：
+		# 1. 能清楚看到预测区域
+		# 2. 掩体质量好
+		# 3. 距离适中
+		var score = 0.0
+		
+		# 检查射界
+		if has_good_firing_angle(cover_pos):
+			score += 30.0
+		
+		# 距离预测点的距离（中等最好）
+		var dist_to_predict = cover_pos.distance_to(last_sound_position)
+		if dist_to_predict > 15.0 and dist_to_predict < 30.0:
+			score += 20.0
+		
+		if score > best_score:
+			best_score = score
+			best_cover = c
+	
+	if best_cover:
+		current_cover = best_cover
+		navigation_agent.target_position = best_cover.global_position
+		print("Enemy ", name, ": Moving to hold angle based on sound!")
+		return best_cover
+	
+	return null
+
+func find_best_cover() -> Marker3D:
+	var covers = get_tree().get_nodes_in_group("cover")
+	if covers.is_empty(): 
+		return null
+	
+	var best_cover = null
+	var best_score = -99999.0
+	
+	for c in covers:
+		if not c is Marker3D: 
+			continue
+		
+		var score = evaluate_cover_quality(c)
+		if score > best_score:
+			best_score = score
+			best_cover = c
+	
+	return best_cover
+
+# 新增：多维度掩体质量评估
+func evaluate_cover_quality(cover: Marker3D) -> float:
+	var score = 0.0
+	
+	# 1. 距离成本（越近越好，权重 30%）
+	var dist = global_position.distance_to(cover.global_position)
+	score -= dist * 0.5
+	
+	# 2. 掩体高度匹配（权重 25%）
+	var cover_height = estimate_cover_height(cover)
+	if cover_height >= current_height * 0.8:  # 能遮挡 80% 身体
+		score += 25.0
+	elif cover_height >= current_height * 0.5:  # 能遮挡 50% 身体
+		score += 15.0
+	else:  # 掩体太矮
+		score -= 10.0
+	
+	# 3. 掩体方向（权重 25%）
+	if target:
+		var to_cover = (cover.global_position - global_position).normalized()
+		var to_player = (target.global_position - global_position).normalized()
+		var angle = to_cover.angle_to(to_player)
+		
+		# 掩体在玩家方向上（角度小于 45 度）
+		if abs(angle) < deg_to_rad(45):
+			score += 25.0
+		elif abs(angle) < deg_to_rad(90):
+			score += 10.0
+		else:  # 掩体在背后，没用
+			score -= 20.0
+	
+	# 4. 视线遮挡检查（权重 15%）
+	if has_line_of_sight_to_cover(cover):
+		score -= 15.0  # 如果掩体暴露在玩家视野中，减分
+	
+	# 5. 掩体拥挤度（权重 15%）
+	var ally_count = count_allies_near_cover(cover, 3.0)
+	if ally_count >= 2:
+		score -= 20.0  # 已经有 2 个队友了，不要太挤
+	elif ally_count == 1:
+		score -= 10.0
+	
+	# 6. 后方退路（权重 10%）
+	if has_escape_route_behind_cover(cover):
+		score += 10.0
+	
+	return score
+
+# 新增：估算掩体高度
+func estimate_cover_height(cover: Marker3D) -> float:
+	# 使用射线检测掩体实际高度
+	var space_state = get_world_3d().direct_space_state
+	var start_pos = cover.global_position + Vector3(0, 0.1, 0)
+	var end_pos = cover.global_position + Vector3(0, 3.0, 0)
+	
+	var query = PhysicsRayQueryParameters3D.create(start_pos, end_pos)
+	query.exclude = [self]
+	var result = space_state.intersect_ray(query)
+	
+	if result:
+		return result.position.y - cover.global_position.y
+	return 0.0
+
+# 新增：检查掩体是否暴露
+func has_line_of_sight_to_cover(cover: Marker3D) -> bool:
+	if not target: 
+		return false
+	
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(
+		target.global_position + Vector3(0, 1.0, 0),
+		cover.global_position + Vector3(0, 1.0, 0)
+	)
+	query.exclude = [self, target]
+	var result = space_state.intersect_ray(query)
+	
+	return result == null  # 无遮挡则返回 true
+
+# 新增：统计掩体附近的队友数量
+func count_allies_near_cover(cover: Marker3D, radius: float) -> int:
+	var count = 0
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	
+	for e in enemies:
+		if e != self and e.is_inside_tree():
+			var dist = e.global_position.distance_to(cover.global_position)
+			if dist < radius:
+				count += 1
+	
+	return count
+
+# 新增：检查掩体后方是否有退路
+func has_escape_route_behind_cover(cover: Marker3D) -> bool:
+	if not target:
+		return true
+	
+	# 计算从掩体远离玩家的方向
+	var escape_dir = (cover.global_position - target.global_position).normalized()
+	var escape_pos = cover.global_position + escape_dir * 5.0
+	
+	# 检查该方向是否可行走（简单的高度检查）
+	if escape_pos.y > global_position.y - 1.0:  # 不是深坑
+		return true
+	
+	return false
+
+# 更新感知系统（视觉）
+func update_perception(delta):
+	if not target or current_health <= 0:
+		return
+	
+	is_player_in_fov = is_player_visible()
+	
+	if is_player_in_fov:
+		# 发现玩家：警觉值增加
+		var dist = global_position.distance_to(target.global_position)
+		# 距离越近，警觉值增加越快
+		var dist_factor = clamp(1.0 - (dist / sight_range), 0.2, 1.0)
+		awareness = min(1.0, awareness + awareness_speed * dist_factor * delta)
+		last_seen_pos = target.global_position
+		
+		if awareness >= 1.0 and not alerted:
+			alert_player_spotted()
+	else:
+		# 失去玩家：警觉值缓慢下降
+		awareness = max(0, awareness - awareness_decay * delta)
+		if awareness <= 0 and alerted and not is_in_combat_recently():
+			# 如果长时间没看到且没发生战斗，取消警报状态
+			# alerted = false # 暂时保持警报，或者进入 SEARCH 状态
+			pass
+
+# 检查玩家当前在物理上是否可见（FOV + RayCast）
+func is_player_visible() -> bool:
+	if not target: return false
+	
+	var dist = global_position.distance_to(target.global_position)
+	if dist > sight_range:
+		return false
+		
+	# 1. FOV 检查
+	var to_target = (target.global_position - global_position).normalized()
+	var forward = -global_transform.basis.z # 向前方向
+	var angle = rad_to_deg(forward.angle_to(to_target))
+	
+	if angle > vision_fov / 2.0 and not alerted:
+		# 如果未警觉，只看前方；如果已警觉，视野更开阔（或者增加侧向检测）
+		return false
+	
+	# 2. 射线遮挡检查 (集成原来的多点检测)
+	var space_state = get_world_3d().direct_space_state
+	var check_points = [
+		get_target_head_pos(),
+		target.global_position + Vector3(0, 1.0, 0), # 身体中心
+	]
+	
+	for cp in check_points:
+		var query = PhysicsRayQueryParameters3D.create(head.global_position, cp)
+		query.exclude = [self]
+		query.collision_mask = 1 # 只检测静态预设（墙壁等）
+		var result = space_state.intersect_ray(query)
+		
+		if not result: # 没撞到墙，说明可见
+			return true
+		else:
+			# 撞到了东西，检查是不是玩家
+			if is_part_of_target(result.collider):
+				return true
+				
+	return false
+
+# 警觉值满后的处理
+func alert_player_spotted():
+	alerted = true
+	print("Enemy ", name, ": TARGET SPOTTED!")
+	if current_state == State.IDLE:
+		current_state = State.ATTACK # 发现后立即攻击
+	alert_nearby_enemies()
+	share_target_with_squad()
+
+# 辅助检查：最近是否参与战斗
+func is_in_combat_recently() -> bool:
+	return Time.get_ticks_msec() / 1000.0 - last_hit_time < 10.0
+
+func has_line_of_sight() -> bool:
+	# 重构：现在视线检查依赖于警觉值和当前可见性
+	return awareness >= 1.0 and is_player_in_fov
+
+# 检测玩家枪械（针对探头模式）- 硬核模式
+func detect_player_weapon() -> bool:
+	if not target:
+		return false
+	
+	var space_state = get_world_3d().direct_space_state
+	
+	# 硬核模式：检测多个可能的枪械位置
+	var weapon_positions = [
+		target.global_position + Vector3(0.3, 1.2, 0.5),   # 右手持枪
+		target.global_position + Vector3(-0.3, 1.2, 0.5),  # 左手持枪
+		target.global_position + Vector3(0, 1.3, 0.6),     # 双手持枪
+		target.global_position + Vector3(0.4, 1.0, 0.4),   # 低姿持枪
+		target.global_position + Vector3(-0.4, 1.0, 0.4),  # 另一侧
+	]
+	
+	for weapon_pos in weapon_positions:
+		var query = PhysicsRayQueryParameters3D.create(head.global_position, weapon_pos)
+		query.exclude = [self]
+		query.collision_mask = 0xFFFFFFFF  # 检测所有层
+		var result = space_state.intersect_ray(query)
+		
+		if result and is_part_of_target(result.collider):
+			return true
+	
+	# 检测玩家武器模型
+	var player_weapon = get_player_weapon_model()
+	if player_weapon:
+		var query = PhysicsRayQueryParameters3D.create(head.global_position, player_weapon.global_position)
+		query.exclude = [self]
+		query.collision_mask = 0xFFFFFFFF  # 检测所有层
+		var result = space_state.intersect_ray(query)
+		
+		if result and is_part_of_target(result.collider):
+			return true
+	
+	return false
+
+# 获取玩家武器模型
+func get_player_weapon_model() -> Node3D:
+	if not target:
+		return null
+	
+	# 尝试查找玩家子节点中的武器
+	for child in target.get_children():
+		if "weapon" in child.name.to_lower() or "gun" in child.name.to_lower():
+			if child is Node3D and child.visible:
+				return child
+	
+	return null
+
+# 检查碰撞体是否属于目标的一部分
+func is_part_of_target(collider: Node) -> bool:
+	if collider == target:
+		return true
+	
+	# 向上查找父节点，检查是否是目标的一部分
+	var check_node = collider
+	while check_node:
+		if check_node == target:
+			return true
+		check_node = check_node.get_parent()
+	
+	return false
+
+func look_at_target(pos, delta):
+	if not target: 
+		return
+	
+	var actual_target_pos = pos
+	if pos.is_equal_approx(target.global_position):
+		# 使用智能预测系统
+		actual_target_pos = predict_target_position(target, 0.15)  # 假设子弹飞行 0.15 秒
+	
+	# 1. Lead Target Prediction（使用更新后的预测）
+	var target_vel = Vector3.ZERO
+	if target is CharacterBody3D:
+		target_vel = target.velocity
+	
+	var dist = global_position.distance_to(actual_target_pos)
+	var lead_time = dist / 40.0  # 假设子弹速度 40m/s
+	var lead_pos = predict_target_position(target, lead_time)
+	
+	# 2. Horizontal Tracking (Body Rotation)
+	var dir = global_position.direction_to(lead_pos)
+	dir.y = 0
+	if dir.length_squared() > 0.001:
+		var target_basis = Basis.looking_at(dir)
+		var target_rot_y = target_basis.get_euler().y
+		var cur_speed = tracking_speed * (2.5 if is_rushing else 1.0)
+		rotation.y = lerp_angle(rotation.y, target_rot_y, cur_speed * delta)
+	
+	# 3. Vertical Tracking (Weapon Pivot Rotation)
+	if weapon_pivot:
+		# Calculate local direction to predicted target for weapon_pivot
+		var local_pos = weapon_pivot.to_local(lead_pos)
+		# Remove negative sign: Positive X rotation is lookup in Godot (if -Z is forward)
+		var target_rot_x = atan2(local_pos.y, -local_pos.z)
+		# Clamp pitch to avoid neck snapping
+		target_rot_x = clamp(target_rot_x, deg_to_rad(-60), deg_to_rad(60))
+		var cur_speed = tracking_speed * (3.0 if is_rushing else 1.2)
+		weapon_pivot.rotation.x = lerp_angle(weapon_pivot.rotation.x, target_rot_x, cur_speed * delta)
+
+func cur_velocity_lerp(current, target_val, delta):
+	return move_toward(current, target_val, 20.0 * delta)
+
+func process_tactical_stance(delta):
+	stance_timer -= delta
+	if stance_timer <= 0:
+		# Combat speed stance changes
+		var base_min = 0.5 if current_state == State.ATTACK or current_state == State.DEFEND else 2.0
+		var base_max = 2.0 if current_state == State.ATTACK or current_state == State.DEFEND else 5.0
+		stance_timer = randf_range(base_min, base_max)
+		
+		var roll = randf()
+		if roll < 0.6:
+			current_stance = Stance.STANDING
+		elif roll < 0.9:
+			current_stance = Stance.CROUCHING
+		else:
+			current_stance = Stance.PRONE
+
+func handle_stance(delta):
+	if not is_inside_tree(): return
+	var target_h = standing_height
+	match current_stance:
+		Stance.STANDING: target_h = standing_height
+		Stance.CROUCHING: target_h = crouching_height
+		Stance.PRONE: target_h = prone_height
+	
+	current_height = lerp(current_height, target_h, 5.0 * delta)
+	
+	# 1. Update Root Collision & Visual Mesh
+	if collision_shape and collision_shape.shape:
+		collision_shape.shape.height = current_height
+		collision_shape.position.y = current_height / 2.0
+		
+	if visual_mesh and visual_mesh.mesh:
+		visual_mesh.mesh.height = current_height
+		visual_mesh.position.y = current_height / 2.0
+
+	# 2. Update Body Hitbox - 使用独立 shape，不共享
+	if body_hitbox and body_hitbox_shape:
+		body_hitbox_shape.shape.height = current_height * 0.6  # 身体占 60% 高度
+		body_hitbox.position.y = current_height * 0.5  # 身体中心在 50% 高度
+		
+	# 3. Update Head and HeadHitbox
+	# 头部固定在胶囊体顶部，使用固定大小
+	var head_y = current_height - 0.15  # 头部中心距离顶部 0.15m
+	if head:
+		head.position.y = head_y
+	if head_hitbox:
+		head_hitbox.position.y = head_y
+		# 确保头部 Hitbox 大小固定，不随身高变化
+		var head_shape = head_hitbox.get_node_or_null("CollisionShape3D")
+		if head_shape and head_shape.shape:
+			head_shape.shape.radius = 0.2  # 固定头部半径
+
+func process_leaning(delta):
+	if not head or not target: 
+		if head:
+			head.position.x = lerp(head.position.x, 0.0, 5.0 * delta)
+			head.rotation.z = lerp(head.rotation.z, 0.0, 5.0 * delta)
+		return
+		
+	var lean_target = 0.0
+	var center_blocked = not has_line_of_sight()
+	
+	if center_blocked:
+		var left_clear = wall_detector_left and not wall_detector_left.is_colliding()
+		var right_clear = wall_detector_right and not wall_detector_right.is_colliding()
+		
+		if left_clear and not right_clear:
+			lean_target = -lean_limit
+		elif right_clear and not left_clear:
+			lean_target = lean_limit
+		elif left_clear and right_clear:
+			lean_target = lean_limit if randf() > 0.5 else -lean_limit
+			
+	# 平滑过渡侧身偏移
+	lean_amount = lerp(lean_amount, lean_target, lean_speed * delta)
+	
+	# 应用到头部节点 (基于最后讨论的逻辑：X 是偏移，Z 是倾角)
+	head.position.x = lean_amount
+	head.rotation.z = -lean_amount * 0.5 
+
+func hit(dmg : float, is_headshot : bool = false):
+	alerted = true 
+	
+	# 受击时立即通知所有附近敌人（更强力的警报传播）
+	alert_nearby_enemies()
+	
+	# Notify allies if not already deeply engaged
+	if current_state == State.IDLE or current_state == State.DEFEND:
+		get_tree().call_group("enemies", "alert_from_ally", target.global_position if target else global_position)
+
+	# 爆头直接秒杀
+	if is_headshot:
+		current_health = 0
+		print("Enemy HEADSHOT! INSTANT KILL!")
+		die()
+		return
+	
+	# 身体伤害
+	current_health -= dmg
+	print("Enemy hit! Damage: ", dmg, " Health: ", current_health)
+	
+	# 受击后撤退逻辑
+	if current_health < max_health * 0.9:
+		if current_state != State.RETREAT:
+			current_state = State.RETREAT
+			current_cover = null
+			
+	# 连续受击检测
+	var now = Time.get_ticks_msec() / 1000.0
+	if now - last_hit_time < 0.5:
+		hit_count_window += 1
+		if hit_count_window >= 2 and current_state != State.RETREAT:
+			current_state = State.RETREAT
+	else:
+		hit_count_window = 1
+	last_hit_time = now
+	
+	if current_health <= 0:
+		die()
+
+# 新增：通知附近所有敌人
+func alert_nearby_enemies():
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	for e in enemies:
+		# 关键检查：确保敌人存在且有效
+		if e != self and is_instance_valid(e) and e.has_method("on_ally_spotted_player"):
+			var dist = global_position.distance_to(e.global_position)
+			if dist < 50.0:  # 50 米范围内的所有敌人
+				e.on_ally_spotted_player(target.global_position if target else global_position)
+
+# 新增：向小队成员（队友）共享目标信息
+func share_target_with_squad():
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	for e in enemies:
+		if e != self and is_instance_valid(e) and e.has_method("on_ally_spotted_player"):
+			# 精确通知队友目标位置
+			e.on_ally_spotted_player(target.global_position if target else last_seen_pos)
+
+# 新增：当队友发现玩家时的反馈函数
+func on_ally_spotted_player(pos: Vector3):
+	# 如果自己没看到玩家，则提高警觉并增加警觉值
+	if not is_player_in_fov:
+		# 队友指出的位置增加了基础警觉，但不足以立即攻击 (比如增加到 0.4)
+		awareness = max(awareness, 0.4)
+		last_known_pos = pos
+		
+		# 转移状态：去调查队友发现的位置
+		if current_state == State.IDLE:
+			current_state = State.SEARCH
+			navigation_agent.target_position = pos
+			print("Enemy ", name, ": Investigating ally's spotting!")
+	else:
+		# 如果已经看到了，确保最后已知位置更新
+		last_known_pos = pos
+
+func alert_from_ally(pos: Vector3):
+	# 被队友惊动，大幅增加警觉值
+	awareness = max(awareness, 0.45)
+	last_known_pos = pos
+	
+	if current_state == State.IDLE or current_state == State.SEARCH:
+		var dist = global_position.distance_to(pos)
+		
+		# 根据角色采取不同响应
+		match my_role:
+			EnemyRole.ASSAULT:
+				# 突击手：主动调查
+				if dist < 40.0:
+					change_state(State.CHASE, true)
+					is_rushing = true
+					alerted = true
+			
+			EnemyRole.SUPPORT:
+				# 支援手：架枪或压制
+				if dist < 60.0:
+					if dist < 30.0:
+						change_state(State.SUPPRESS, true)
+						suppression_timer = randf_range(3.0, 6.0)
+					else:
+						change_state(State.DEFEND, true)
+					alerted = true
+			
+			EnemyRole.SNIPER:
+				# 狙击手：观察或埋伏
+				if dist > 20.0:
+					change_state(State.AMBUSH, true)
+					ambush_timer = randf_range(5.0, 10.0)
+				else:
+					change_state(State.DEFEND, true)
+				current_stance = Stance.PRONE
+				alerted = true
+			
+			EnemyRole.FLANKER:
+				# 侧翼手：尝试绕后
+				change_state(State.FLANK, true)
+				flank_angle = randf_range(60, 120)
+				ambush_timer = randf_range(8.0, 12.0)
+				alerted = true
+		
+		# 如果还没变状态，则进入搜索
+		if current_state == State.IDLE or current_state == State.SEARCH:
+			change_state(State.SEARCH, true)
+			navigation_agent.target_position = pos
+			investigation_timer = randf_range(10.0, 15.0)
+
+func die():
+	# 立即标记为死亡，防止后续处理
+	current_health = 0
+	# 停止所有声音
+	if shoot_sound:
+		shoot_sound.stop()
+	if footstep_sound:
+		footstep_sound.stop()
+	# 从场景树中移除
+	queue_free()
+
+# ==================== ENHANCED DECISION SYSTEM ====================
+
+# 分析玩家行为模式
+func update_player_pattern_analysis(delta):
+	if not target or not target is CharacterBody3D:
+		return
+	
+	var current_vel = target.velocity
+	
+	# 判断玩家移动模式
+	if current_vel.length() < 0.5:
+		player_movement_prediction = "stationary"
+	elif current_vel.length() > 4.0:
+		# 检查是否在侧向移动
+		var to_player = (target.global_position - global_position).normalized()
+		var lateral_component = current_vel.normalized().cross(to_player).length()
+		if lateral_component > 0.7:
+			player_movement_prediction = "flanking"
+		else:
+			player_movement_prediction = "advancing"
+	else:
+		# 检查是否在后退
+		var to_player = (target.global_position - global_position).normalized()
+		var dot_product = current_vel.normalized().dot(to_player)
+		if dot_product < -0.5:
+			player_movement_prediction = "retreating"
+		else:
+			player_movement_prediction = "advancing"
+	
+	last_player_velocity = current_vel
+
+# 检查是否可以切换状态（避免频繁切换）
+func can_change_state() -> bool:
+	var current_time = Time.get_ticks_msec() / 1000.0
+	return (current_time - last_state_change_time) >= state_persistence
+
+# 安全的状态切换函数
+func change_state(new_state: State, force: bool = false):
+	if not force and not can_change_state() and current_state == new_state:
+		return
+	
+	if current_state != new_state:
+		last_state_change_time = Time.get_ticks_msec() / 1000.0
+		current_state = new_state
+
+# 压制射击状态
+func process_suppress(delta):
+	if not is_inside_tree() or not target:
+		change_state(State.DEFEND)
+		return
+	
+	# 压制射击：向最后已知位置持续开火
+	look_at_target(last_seen_pos, delta * 3.0)
+	
+	# 降低射速但持续射击
+	if fire_cooldown <= 0:
+		shoot()
+		fire_cooldown = fire_rate * 1.5
+	
+	# 压制时间限制
+	suppression_timer -= delta
+	if suppression_timer <= 0:
+		# 压制结束，根据情况选择下一步
+		if has_line_of_sight():
+			change_state(State.ATTACK)
+		else:
+			change_state(State.SEARCH)
+	
+	# 缓慢移动寻找更好位置
+	var move_dir = global_transform.basis.x * strafe_dir
+	velocity.x = cur_velocity_lerp(velocity.x, move_dir.x * SPEED_CROUCH * 0.5, delta)
+	velocity.z = cur_velocity_lerp(velocity.z, move_dir.z * SPEED_CROUCH * 0.5, delta)
+
+# 侧翼包抄状态
+func process_flank(delta):
+	if not is_inside_tree() or not target:
+		change_state(State.DEFEND)
+		return
+	
+	var dist = global_position.distance_to(target.global_position)
+	
+	# 如果已经很近或者被发现，转为攻击
+	if dist < 12.0 or has_line_of_sight():
+		change_state(State.ATTACK)
+		return
+	
+	# 计算侧翼路径点
+	var to_player = (target.global_position - global_position).normalized()
+	var flank_dir = to_player.rotated(Vector3.UP, deg_to_rad(flank_angle))
+	var flank_target = target.global_position - flank_dir * 15.0  # 绕到玩家后方15米
+	
+	navigation_agent.target_position = flank_target
+	
+	if navigation_agent.is_target_reachable():
+		var next_path_pos = navigation_agent.get_next_path_position()
+		var dir = global_position.direction_to(next_path_pos)
+		dir.y = 0
+		dir = dir.normalized()
+		
+		# 快速移动但保持隐蔽
+		current_stance = Stance.CROUCHING
+		velocity.x = cur_velocity_lerp(velocity.x, dir.x * SPEED_RUN * 1.2, delta)
+		velocity.z = cur_velocity_lerp(velocity.z, dir.z * SPEED_RUN * 1.2, delta)
+		
+		look_at_target(next_path_pos, delta)
+	
+	# 侧翼超时检查
+	ambush_timer -= delta
+	if ambush_timer <= 0:
+		change_state(State.ATTACK)
+
+# 埋伏状态
+func process_ambush(delta):
+	if not is_inside_tree() or not target:
+		change_state(State.IDLE)
+		return
+	
+	# 保持隐蔽，等待玩家接近
+	current_stance = Stance.PRONE  # 匍匐隐蔽
+	velocity.x = move_toward(velocity.x, 0, delta * 10.0)
+	velocity.z = move_toward(velocity.z, 0, delta * 10.0)
+	
+	# 监视玩家方向
+	look_at_target(target.global_position, delta * 2.0)
+	
+	var dist = global_position.distance_to(target.global_position)
+	
+	# 玩家进入攻击范围或者被发现，发起攻击
+	if dist < attack_range or has_line_of_sight():
+		# 伏击！突然开火
+		is_rushing = false
+		change_state(State.ATTACK, true)
+		print("Enemy ", name, ": AMBUSH! Opening fire!")
+		return
+	
+	# 玩家太远，取消埋伏
+	if dist > sight_range * 1.5:
+		change_state(State.IDLE)
+		return
+	
+	# 埋伏超时
+	ambush_timer -= delta
+	if ambush_timer <= 0:
+		# 重新选择埋伏位置或转为搜索
+		if randf() < 0.7:
+			ambush_timer = randf_range(5.0, 10.0)
+		else:
+			change_state(State.SEARCH)
+
+# ==================== ROLE SYSTEM ====================
+
+func assign_role():
+	if role_assigned:
+		return
+	
+	# 根据威胁等级和随机性分配角色
+	var threat_level = 1.0
+	if get_node_or_null("/root/GlobalSave"):
+		threat_level = get_node("/root/GlobalSave").threat_level
+	
+	var roll = randf()
+	
+	# 高难度下更多样化的角色分配
+	if threat_level >= 3.0:
+		if roll < 0.3:
+			my_role = EnemyRole.ASSAULT
+		elif roll < 0.5:
+			my_role = EnemyRole.SUPPORT
+		elif roll < 0.7:
+			my_role = EnemyRole.SNIPER
+		else:
+			my_role = EnemyRole.FLANKER
+	else:
+		# 低难度下主要是突击手
+		if roll < 0.6:
+			my_role = EnemyRole.ASSAULT
+		elif roll < 0.8:
+			my_role = EnemyRole.SUPPORT
+		else:
+			my_role = EnemyRole.FLANKER
+	
+	role_assigned = true
+	
+	# 根据角色调整属性（保持平衡，不过于强力）
+	apply_role_modifiers()
+
+func apply_role_modifiers():
+	match my_role:
+		EnemyRole.ASSAULT:
+			# 突击手：近距离作战，高机动性
+			accuracy *= 1.2  # 稍微降低精度保持平衡
+			SPEED_RUN *= 1.1
+			retreat_threshold = 30.0  # 更愿意撤退
+		
+		EnemyRole.SUPPORT:
+			# 支援手：火力压制，中等距离
+			fire_rate *= 0.9  # 射速稍快
+			damage_body *= 0.9  # 伤害稍低保持平衡
+			attack_range *= 1.2
+		
+		EnemyRole.SNIPER:
+			# 狙击手：远距离精确射击
+			accuracy *= 0.6  # 精度大幅提高
+			sight_range *= 1.5
+			SPEED_RUN *= 0.8  # 移动较慢
+			max_health *= 0.8  # 血量较少保持平衡
+		
+		EnemyRole.FLANKER:
+			# 侧翼手：绕后偷袭
+			SPEED_RUN *= 1.15
+			flank_angle = 90.0  # 大角度侧翼
+			is_rushing = true
+
+func join_nearest_squad():
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	var nearest_leader = null
+	var min_dist = 15.0
+	
+	for e in enemies:
+		if e != self and is_instance_valid(e) and e.has_method("is_squad_leader") and e.is_squad_leader():
+			var dist = global_position.distance_to(e.global_position)
+			if dist < min_dist:
+				min_dist = dist
+				nearest_leader = e
+	
+	if nearest_leader and is_instance_valid(nearest_leader):
+		squad_leader = nearest_leader
+		squad_leader.add_squad_member(self)
+	else:
+		# 自己成为队长
+		squad_leader = self
+		form_squad()
+
+func form_squad():
+	var enemies = get_tree().get_nodes_in_group("enemies")
+	
+	for e in enemies:
+		if e != self and is_instance_valid(e) and e.global_position.distance_to(global_position) < 10.0:
+			if e.has_method("set_squad_leader"):
+				e.set_squad_leader(self)
+			squad_members.append(e)
+
+func is_squad_leader() -> bool:
+	return squad_leader == self
+
+func add_squad_member(member: Node):
+	if not squad_members.has(member):
+		squad_members.append(member)
+
+func set_squad_leader(leader: Node):
+	squad_leader = leader
+
+func on_squad_member_spotted_target(pos: Vector3):
+	if current_state == State.IDLE:
+		alerted = true
+		last_known_pos = pos
+		current_state = State.DEFEND
+		print("Enemy ", name, ": Squad member spotted target! Moving to intercept.
+
+res://addons/proto_controller/proto_controller.gd：
+extends CharacterBody3D
+
+enum Stance { STANDING, CROUCHING, PRONE }
+
+## --- 基础配置 ---
+@export var can_move : bool = true
+@export var has_gravity : bool = true
+@export var can_jump : bool = true
+@export var can_sprint : bool = false
+
+@export_group("Speeds")
+@export var look_speed : float = 0.002
+@export var ads_look_speed : float = 0.001 
+@export var base_speed : float = 7.0
+@export var jump_velocity : float = 4.5
+@export var sprint_speed : float = 10.0
+@export var ads_lerp_speed : float = 20.0
+@export var shell_scene : PackedScene = preload("res://addons/proto_controller/bullet_shell.tscn")
+@export var bullet_hole_scene : PackedScene = preload("res://addons/proto_controller/bullet_hole.tscn")
+
+@export_group("Weapon Settings")
+@export var wall_avoid_speed : float = 12.0
+@export var weapon_down_angle : float = -50.0
+@export var weapon_back_offset : float = 0.65
+@export var primary_wall_dist : float = 1.3 # 增加探测深度，防止长枪管穿墙
+@export var secondary_wall_dist : float = 0.6
+
+@export_group("Shooting - Primary (MCX)")
+@export var primary_fire_rate : float = 0.1 # 10 rounds per second
+@export var primary_recoil_strength : float = 0.35
+@export var primary_hip_spread : float = 2.0
+@export var primary_damage : float = 25.0
+
+@export_group("Shooting - Secondary (Glock)")
+@export var secondary_fire_rate : float = 0.2 # 5 rounds per second
+@export var secondary_recoil_strength : float = 0.5
+@export var secondary_hip_spread : float = 3.5
+@export var secondary_damage : float = 15.0
+
+@export_group("Visual Recoil Settings")
+@export var recoil_recovery_speed : float = 10.0
+@export var recoil_snap_speed : float = 20.0
+@export var max_recoil_x : float = 5.0
+
+@export_group("Sound Settings")
+@export var primary_single_fire_sound : AudioStream  # 单发音效
+@export var primary_auto_fire_sound : AudioStream    # 连发音效
+@export var secondary_fire_sound : AudioStream
+@export var reload_sound : AudioStream
+@export var dry_fire_sound : AudioStream
+@export var shell_eject_sound : AudioStream
+@export var footstep_sound : AudioStream
+@export var impact_sound : AudioStream
+
+@export_group("Ammo Settings")
+@export var primary_mag_capacity : int = 30
+@export var primary_mag_count : int = 4  # 3+1 (3备用+1装填)
+@export var secondary_mag_capacity : int = 21
+@export var secondary_mag_count : int = 4
+@export var max_health : float = 100.0
+
+@export var primary_reload_time : float = 2.0
+@export var secondary_reload_time : float = 1.5
+
+@export_group("Secondary Weapon ADS")
+@export var secondary_ads_pos : Vector3 = Vector3(-0.206, -0.15, 0.1)
+@export var secondary_ads_fov : float = 40.0
+
+@export_group("Lean Settings")
+@export var lean_angle : float = 15.0
+@export var lean_offset : float = 0.3
+@export var lean_speed : float = 8.0
+
+@export_group("Stance Settings")
+@export var standing_height : float = 1.3
+@export var crouching_height : float = 0.9
+@export var prone_height : float = 0.4
+@export var crouch_speed_mult : float = 0.4
+@export var crouch_sprint_mult : float = 0.7
+@export var prone_speed_mult : float = 0.3
+@export var stance_transition_speed : float = 8.0
+
+## --- 核心组件引用 ---
+@onready var head: Node3D = $Head
+@onready var main_camera: Camera3D = $"Head/主视角"
+@onready var ads_camera: Camera3D = $"Head/瞄准视角"
+@onready var collision_shape: CollisionShape3D = $Collider
+@onready var character_mesh: MeshInstance3D = $Mesh
+@onready var wall_detector: RayCast3D = $"Head/主视角/WallDetector"
+@onready var weapon_holder: Node3D = $Head/WeaponPivot
+@onready var primary_weapon: Node3D = $Head/WeaponPivot/mcx
+@onready var secondary_weapon: Node3D = $Head/WeaponPivot/glock
+@onready var aim_ray: RayCast3D = $"Head/主视角/AimRay"
+
+@onready var primary_muzzle = $Head/WeaponPivot/mcx/Muzzle
+@onready var primary_eject = $Head/WeaponPivot/mcx/Eject
+@onready var secondary_muzzle = $Head/WeaponPivot/glock/Muzzle
+@onready var secondary_eject = $Head/WeaponPivot/glock/Eject
+
+@onready var gunfire_sound : AudioStreamPlayer3D = $GunfireSound
+@onready var reload_sound_player : AudioStreamPlayer3D = $ReloadSound
+@onready var dry_fire_sound_player : AudioStreamPlayer3D = $DryFireSound
+@onready var shell_eject_sound_player : AudioStreamPlayer3D = $ShellEjectSound
+@onready var footstep_sound_player : AudioStreamPlayer = $FootstepSound
+@onready var impact_sound_player : AudioStreamPlayer3D = $ImpactSound
+
+@onready var primary_flash = $Head/WeaponPivot/mcx/Muzzle/Flash
+@onready var secondary_flash = $Head/WeaponPivot/glock/Muzzle/Flash
+
+@onready var ammo_hud : CanvasLayer = null
+
+## --- 内部变量 ---
+var mouse_captured : bool = false
+var look_rotation : Vector2
+var is_ads : bool = false 
+
+var current_health : float = 100.0
+
+var weapon_normal_pos : Vector3
+var weapon_normal_rot : Vector3
+
+var ads_weight : float = 0.0
+var default_fov : float
+var target_ads_fov : float
+var ads_camera_pos : Vector3
+var current_ads_pos : Vector3
+
+var lean_weight : float = 0.0 # -1.0 (Q) to 1.0 (E)
+var hand_side_weight : float = 0.0 # 0.0 (Left) to 1.0 (Right)
+var head_base_pos : Vector3
+
+var current_weapon_index : int = 1 # 1: Primary, 2: Secondary
+var is_switching : bool = false
+var switch_weight : float = 0.0 # 0 (Up) to 1 (Down)
+var weapon_list : Array = []
+var next_weapon_index : int = 1
+
+var primary_ads_pos : Vector3
+var primary_ads_fov : float
+
+var lean_target_state : int = 0 # 0: None, -1: Left (Q), 1: Right (E)
+
+var fire_cooldown : float = 0.0
+var current_recoil : Vector3 = Vector3.ZERO
+var recoil_pivot : Vector3 = Vector3.ZERO # The target recoil rotation
+var has_fired_this_click : bool = false
+var is_first_shot_in_burst : bool = true
+
+var primary_magazines : Array[int] = []  # 弹匣数组，每个元素是该弹匣的当前弹药数
+var primary_current_mag_index : int = 0  # 当前装填的弹匣索引
+var secondary_magazines : Array[int] = []
+var secondary_current_mag_index : int = 0
+var is_reloading : bool = false
+
+var current_stance : int = Stance.STANDING
+var target_stance : int = Stance.STANDING
+var stance_height : float = 1.8
+var initial_collision_height : float = 1.8
+
+var footstep_timer : float = 0.0
+var footstep_interval : float = 0.4
+
+# Sound emission signal for AI
+signal player_made_sound(position: Vector3, sound_type: String, volume: float)
+
+func _ready() -> void:
+	current_health = max_health
+	check_input_mappings()
+	look_rotation.y = rotation.y
+	look_rotation.x = head.rotation.x
+	head_base_pos = head.position
+	initial_collision_height = collision_shape.shape.height
+	stance_height = standing_height
+	
+	# 确保资源唯一，防止干扰其他实例
+	if character_mesh and character_mesh.mesh:
+		character_mesh.mesh = character_mesh.mesh.duplicate()
+	if collision_shape and collision_shape.shape:
+		collision_shape.shape = collision_shape.shape.duplicate()
+	
+	if weapon_holder:
+		weapon_normal_pos = weapon_holder.position
+		weapon_normal_rot = weapon_holder.rotation
+	
+	default_fov = main_camera.fov
+	target_ads_fov = ads_camera.fov
+	ads_camera_pos = ads_camera.position
+	
+	main_camera.make_current()
+	
+	# 初始化武器库
+	weapon_list = [primary_weapon, secondary_weapon]
+	primary_ads_pos = ads_camera.position
+	primary_ads_fov = ads_camera.fov
+	
+	# 初始状态：显示主武器，隐藏副武器
+	primary_weapon.visible = true
+	secondary_weapon.visible = false
+	
+	# 连接声音信号到场景树根节点
+	if not get_tree().root.has_signal("player_made_sound"):
+		get_tree().root.add_user_signal("player_made_sound", [{"name": "position", "type": TYPE_VECTOR3}, {"name": "sound_type", "type": TYPE_STRING}, {"name": "volume", "type": TYPE_FLOAT}])
+	
+	# 修复：确保 WallDetector 朝向正前方，探测起点稍微下移
+	if wall_detector:
+		wall_detector.position.x = -0.1 
+		wall_detector.position.y = -0.2 
+		wall_detector.position.z = 0.0 
+		wall_detector.rotation_degrees.x = 90 # 确保 -Y 轴朝向正前方
+		wall_detector.target_position = Vector3(0, -1.8, 0) # 加长探测线
+	
+	if aim_ray:
+		aim_ray.add_exception(self) # 核心修复：防止射线撞击自己导致弹孔出现在枪膛里
+		aim_ray.position.z = 0.0
+		aim_ray.target_position = Vector3(0, -100, 0) # 长距离射击线
+	
+	# 初始化弹药（弹匣系统）
+	primary_magazines.clear()
+	for i in range(primary_mag_count):
+		primary_magazines.append(primary_mag_capacity)
+	primary_current_mag_index = 0
+	
+	secondary_magazines.clear()
+	for i in range(secondary_mag_count):
+		secondary_magazines.append(secondary_mag_capacity)
+	secondary_current_mag_index = 0
+	
+	# 加载并实例化 HUD
+	var hud_scene = load("res://addons/proto_controller/ammo_hud.tscn")
+	if hud_scene:
+		ammo_hud = hud_scene.instantiate()
+		add_child(ammo_hud)
+		update_ammo_display()
+	
+	capture_mouse()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		capture_mouse()
+	if Input.is_key_pressed(KEY_ESCAPE):
+		release_mouse()
+	
+	if mouse_captured and event is InputEventMouseMotion:
+		rotate_look(event.relative)
+	
+	# 武器切换快捷键
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_1 and current_weapon_index != 1 and not is_switching:
+			start_weapon_switch(1)
+		elif event.keycode == KEY_2 and current_weapon_index != 2 and not is_switching:
+			start_weapon_switch(2)
+		
+		# 探头切换逻辑
+		if event.keycode == KEY_Q:
+			lean_target_state = -1 if lean_target_state != -1 else 0
+		elif event.keycode == KEY_E:
+			lean_target_state = 1 if lean_target_state != 1 else 0
+		
+		# 换弹快捷键
+		elif event.keycode == KEY_R:
+			if not is_reloading:
+				reload()
+		
+		# 姿态切换
+		elif event.keycode == KEY_C:
+			if current_stance == Stance.CROUCHING:
+				target_stance = Stance.STANDING
+			else:
+				target_stance = Stance.CROUCHING
+		elif event.keycode == KEY_V:
+			if current_stance == Stance.PRONE:
+				target_stance = Stance.STANDING
+			else:
+				target_stance = Stance.PRONE
+	
+	# 右键瞄准逻辑 (修复被删掉的部分)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			# 只有在没撞墙的情况下按右键才立刻开镜
+			if not wall_detector.is_colliding():
+				toggle_camera(true)
+		else:
+			toggle_camera(false)
+
+func _physics_process(delta: float) -> void:
+	handle_ads_animation(delta)
+	handle_leaning(delta)
+	handle_weapon_avoidance(delta)
+	handle_stance(delta) # 先算姿态和高度
+	handle_weapon_switching(delta)
+	handle_shooting(delta) # 后算射击，保证位置准确
+	handle_recoil_physics(delta)
+	
+	# 移动逻辑保持不变
+	handle_movement(delta)
+	if not is_on_floor():
+		velocity += get_gravity() * delta
+	
+	# Fall Reset
+	if global_position.y < -30.0:
+		die()
+		
+	move_and_slide()
+
+## --- 避墙逻辑实现（含自动恢复开镜） ---
+func handle_weapon_avoidance(delta: float):
+	if not wall_detector or not weapon_holder: return
+
+	if wall_detector.is_colliding():
+		var collision_normal = wall_detector.get_collision_normal()
+		var is_floor = collision_normal.y > 0.7
+		
+		# 非趴姿忽略地面
+		if is_floor and current_stance != Stance.PRONE:
+			# 恢复正常姿态
+			var side_shift = lerp(0.0, -ads_camera_pos.x * 2.0, hand_side_weight)
+			var current_base_pos = weapon_normal_pos + Vector3(side_shift, -switch_weight * 0.5, 0)
+			
+			weapon_holder.rotation.x = lerp_angle(weapon_holder.rotation.x, weapon_normal_rot.x, wall_avoid_speed * delta)
+			weapon_holder.position = weapon_holder.position.lerp(current_base_pos, wall_avoid_speed * delta)
+			return
+
+		# 1. 触发避让：如果是开镜状态，强制收回
+		if is_ads:
+			toggle_camera(false)
+		
+		var target_rot_x : float
+		var target_pos : Vector3
+		var side_shift = lerp(0.0, -ads_camera_pos.x * 2.0, hand_side_weight)
+		var current_base_pos = weapon_normal_pos + Vector3(side_shift, 0, 0)
+		
+		if is_floor and current_stance == Stance.PRONE:
+			# 趴下撞地：枪支停在地面，不再跟随视角下移（抵消头部下移角度）
+			target_rot_x = -head.rotation.x 
+			# 稍微上升并后移，模仿枪支“架”在地面上的感觉，防止弹匣深入地下
+			target_pos = current_base_pos + Vector3(0, 0.15, 0.1) 
+		else:
+			# 正常撞墙：muzzle up + sinking
+			target_rot_x = weapon_normal_rot.x - deg_to_rad(weapon_down_angle)
+			var x_offset = lerp(0.05, -0.05, hand_side_weight)
+			target_pos = current_base_pos + Vector3(x_offset, -0.3 - (switch_weight * 0.5), weapon_back_offset * 1.2)
+		
+		weapon_holder.rotation.x = lerp_angle(weapon_holder.rotation.x, target_rot_x, wall_avoid_speed * delta)
+		weapon_holder.position = weapon_holder.position.lerp(target_pos, wall_avoid_speed * delta)
+	else:
+		# 2. 离开墙壁：回到正常姿态
+		# 计算基础侧向偏移（切手逻辑）
+		var side_shift = lerp(0.0, -ads_camera_pos.x * 2.0, hand_side_weight)
+		var current_base_pos = weapon_normal_pos + Vector3(side_shift, -switch_weight * 0.5, 0)
+		
+		weapon_holder.rotation.x = lerp_angle(weapon_holder.rotation.x, weapon_normal_rot.x, wall_avoid_speed * delta)
+		weapon_holder.position = weapon_holder.position.lerp(current_base_pos, wall_avoid_speed * delta)
+		
+		# 【关键改动】：如果玩家一直按着右键，且当前不是开镜状态，且枪已经快抬起来了，就自动恢复开镜
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and not is_ads:
+			# 检查枪管是否已经基本抬起（避免视角瞬间切换太突兀）
+			if abs(weapon_holder.rotation.x - weapon_normal_rot.x) < 0.1:
+				toggle_camera(true)
+
+func rotate_look(rot_input : Vector2):
+	var current_look_speed = ads_look_speed if is_ads else look_speed
+	look_rotation.x -= rot_input.y * current_look_speed
+	look_rotation.x = clamp(look_rotation.x, deg_to_rad(-85), deg_to_rad(85))
+	look_rotation.y -= rot_input.x * current_look_speed
+	
+	transform.basis = Basis()
+	rotate_y(look_rotation.y)
+	head.transform.basis = Basis()
+	head.rotate_x(look_rotation.x)
+
+func toggle_camera(should_ads: bool):
+	is_ads = should_ads
+
+func handle_ads_animation(delta: float):
+	# 计算权重
+	var target_weight = 1.0 if is_ads else 0.0
+	ads_weight = lerp(ads_weight, target_weight, ads_lerp_speed * delta)
+	
+	# FOV 缩放
+	main_camera.fov = lerp(default_fov, target_ads_fov, ads_weight)
+	
+	# 获取当前的瞄准目标点（已考虑姿态偏移和倾斜）
+	var target_pos = ads_camera.position
+	var target_rot_z = ads_camera.rotation.z
+	
+	# 插值位置和 Z 轴旋转 (开镜倾斜)
+	main_camera.position = main_camera.position.lerp(target_pos * ads_weight, ads_lerp_speed * delta)
+	main_camera.rotation.z = lerp(main_camera.rotation.z, target_rot_z * ads_weight, ads_lerp_speed * delta)
+
+func handle_leaning(delta: float):
+	# 疾跑或趴下时打断探头
+	if can_sprint and Input.is_action_pressed("sprint"):
+		lean_target_state = 0
+	if current_stance == Stance.PRONE:
+		lean_target_state = 0
+	
+	var target_lean = float(lean_target_state)
+	var target_hand_side = 1.0 if lean_target_state == 1 else 0.0
+	
+	lean_weight = lerp(lean_weight, target_lean, lean_speed * delta)
+	hand_side_weight = lerp(hand_side_weight, target_hand_side, lean_speed * delta)
+	
+	# 应用位移和旋转到头部
+	# Z 轴旋转 (探头角度)
+	head.rotation.z = -lean_weight * deg_to_rad(lean_angle)
+	
+	# X 轴位移 (探头位移) + Y 轴微调 (保持真实感)
+	var lean_pos_offset = Vector3(lean_weight * lean_offset, -abs(lean_weight) * 0.1, 0)
+	head.position = head_base_pos + lean_pos_offset
+
+func handle_stance(delta: float):
+	# 疾跑时如果正在趴着，强制站立；蹲着时允许疾跑
+	if can_sprint and Input.is_action_pressed("sprint") and current_stance == Stance.PRONE:
+		target_stance = Stance.STANDING
+	
+	# 平滑过渡姿态
+	if current_stance != target_stance:
+		current_stance = target_stance
+	
+	# 根据姿态设置目标高度
+	var target_height : float
+	match current_stance:
+		Stance.STANDING:
+			target_height = standing_height
+		Stance.CROUCHING:
+			target_height = crouching_height
+		Stance.PRONE:
+			target_height = prone_height
+		_:
+			target_height = standing_height
+	
+	# 平滑调整高度
+	stance_height = lerp(stance_height, target_height, stance_transition_speed * delta)
+	
+	# 更新碰撞体高度
+	if collision_shape and collision_shape.shape:
+		collision_shape.shape.height = stance_height
+		collision_shape.position.y = stance_height / 2.0
+	
+	# 更新视觉模型高度
+	if character_mesh and character_mesh.mesh is CapsuleMesh:
+		character_mesh.mesh.height = stance_height
+		character_mesh.position.y = stance_height / 2.0
+	
+	# 更新相机高度 (相对于脚底，即 y=0)
+	# 假设眼睛高度在头顶下方 0.1m
+	var eye_height = stance_height - 0.1
+	head.position.y = eye_height
+	
+	# 趴下时提升武器高度并微斜防止穿模
+	var weapon_pos_correction = 0.0
+	var weapon_rot_correction = 0.0
+	if current_stance == Stance.PRONE:
+		weapon_pos_correction = 0.22 # 稍微再抬高一点
+		weapon_rot_correction = deg_to_rad(-30) # 倾斜角度增加，更好地避开长弹匣
+	elif current_stance == Stance.CROUCHING:
+		weapon_pos_correction = 0.05 # 蹲姿微调
+	
+	# 应用到武器挂载点
+	weapon_holder.position.y = weapon_normal_pos.y + weapon_pos_correction
+	weapon_holder.rotation.z = weapon_normal_rot.z + weapon_rot_correction
+	
+	# 重要：同步瞄准相机，保证瞄准线不乱
+	if ads_camera:
+		# 1. 计算基础位置（考虑左右手镜像）
+		var ads_offset = ads_camera_pos
+		ads_offset.x = lerp(ads_camera_pos.x, -ads_camera_pos.x, hand_side_weight)
+		
+		# 2. 绕 Z 轴旋转该位置，以匹配武器的倾斜 arc
+		# Vector3.BACK 是 (0,0,1)，绕 +Z 轴旋转
+		var rotated_offset = ads_offset.rotated(Vector3.BACK, weapon_rot_correction)
+		
+		# 3. 应用高度补偿和旋转
+		ads_camera.position = rotated_offset + Vector3(0, weapon_pos_correction, 0)
+		ads_camera.rotation.z = weapon_rot_correction
+		
+		# 实时更新开镜目标点，防止姿态切换时瞄准跳变
+		current_ads_pos = ads_camera.position
+		
+		# 重要：同步避墙检测点 X 轴，防止探头时枪身由于检测点没跟过去而穿墙
+		if wall_detector:
+			wall_detector.position.x = ads_camera.position.x
+
+func handle_shooting(delta: float):
+	if fire_cooldown > 0:
+		fire_cooldown -= delta
+	
+	var is_trigger_pressed = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	
+	# 重置半自动触发和连发标志
+	if not is_trigger_pressed:
+		has_fired_this_click = false
+		is_first_shot_in_burst = true
+		return
+		
+	# 正在切枪、撞墙或换弹中不可开火
+	if is_switching or wall_detector.is_colliding() or is_reloading:
+		return
+	
+	# 检查弹药
+	var current_mags = primary_magazines if current_weapon_index == 1 else secondary_magazines
+	var current_mag_idx = primary_current_mag_index if current_weapon_index == 1 else secondary_current_mag_index
+	if current_mags[current_mag_idx] <= 0:
+		# 播放空枪点击声
+		if not has_fired_this_click and dry_fire_sound_player and dry_fire_sound:
+			dry_fire_sound_player.stream = dry_fire_sound
+			dry_fire_sound_player.play()
+			has_fired_this_click = true
+		return
+	
+	# 射击逻辑区分
+	if current_weapon_index == 1: # 步枪：全自动
+		if fire_cooldown <= 0:
+			fire()
+	else: # 手枪：半自动
+		if not has_fired_this_click and fire_cooldown <= 0:
+			fire()
+			has_fired_this_click = true
+
+func fire():
+	var fire_rate = primary_fire_rate if current_weapon_index == 1 else secondary_fire_rate
+	fire_cooldown = fire_rate
+	
+	# 0. 计算散布 (Spread)
+	var spread = primary_hip_spread if current_weapon_index == 1 else secondary_hip_spread
+	# 散布随瞄准权重减小
+	var current_spread = lerp(spread, 0.0, ads_weight)
+	
+	# 应用散布到 AimRay 的角度
+	var spread_h = randf_range(-current_spread, current_spread)
+	var spread_v = randf_range(-current_spread, current_spread)
+	
+	# --- 视差修正逻辑 (Parallax Correction) ---
+	# 1. 首先从相机中心点发射一条虚拟射线，确定玩家究竟在看哪里（目标点）
+	var camera_aim_dist = 100.0
+	var aim_target_point = main_camera.global_position - main_camera.global_transform.basis.z * camera_aim_dist
+	
+	# 创建一个临时射线检测
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(main_camera.global_position, aim_target_point)
+	query.exclude = [self] # 排除玩家自己
+	query.collision_mask = 7 # 检测所有层
+	var result = space_state.intersect_ray(query)
+	
+	# 重要：只接受敌人或 Hitbox 作为目标点，不接受地图
+	if result:
+		var collider = result.collider
+		# 如果击中敌人或 Hitbox，使用该点
+		if collider is Area3D or (collider is CharacterBody3D and collider.has_method("hit")):
+			aim_target_point = result.position
+		# 否则，继续使用原始的目标点（不修改）
+	
+	# 2. 将实际射击射线起点移动到枪口，并使其"看向"目标点
+	var muzzle = primary_muzzle if current_weapon_index == 1 else secondary_muzzle
+	if muzzle:
+		aim_ray.global_position = muzzle.global_position
+		# 使 AimRay 指向目标点 (-Z 轴指向目标)
+		aim_ray.look_at(aim_target_point, Vector3.UP)
+		
+		# 3. 视差修正：由于 AimRay 默认投射轴是 -Y，我们要把它旋转 90 度对齐到 -Z
+		aim_ray.rotate_object_local(Vector3.RIGHT, deg_to_rad(90))
+		
+		# 4. 在此基础上叠加随机散布
+		aim_ray.rotate_object_local(Vector3.RIGHT, deg_to_rad(spread_v))
+		aim_ray.rotate_object_local(Vector3.UP, deg_to_rad(-spread_h))
+	
+	aim_ray.force_raycast_update()
+	
+	# 调试：打印 AimRay 是否检测到东西
+	if aim_ray.is_colliding():
+		print("AimRay hit: ", aim_ray.get_collider().name, " at ", aim_ray.get_collision_point())
+	else:
+		print("AimRay hit nothing")
+	
+	# --------------------------
+	# 使用 direct_space_state 做精确的双重检测
+	# --------------------------
+	# 直接使用从枪口到目标的方向，而不是依赖 aim_ray 的旋转（muzzle 已在上面声明）
+	var from = muzzle.global_position if muzzle else aim_ray.global_position
+	var shoot_dir = (aim_target_point - from).normalized()
+	var to = from + shoot_dir * 100.0
+	
+	# 调试：打印射线方向
+	print("Shoot from: ", from, " direction: ", shoot_dir, " to: ", to)
+	print("aim_target_point: ", aim_target_point)
+	
+	var is_headshot = false
+	var final_hit_collider = null
+	var final_hit_point = Vector3.ZERO
+	var final_hit_normal = Vector3.ZERO
+	var hit_something = false
+	
+	# 第一次检测：检测所有层（包括 Hitbox 和物理碰撞体）
+	var query_all = PhysicsRayQueryParameters3D.create(from, to)
+	query_all.exclude = [self]
+	query_all.collision_mask = 7  # layer 1+2+4
+	query_all.collide_with_areas = true
+	query_all.collide_with_bodies = true
+	var result_all = space_state.intersect_ray(query_all)
+	
+	print("All result: ", result_all)
+	if result_all:
+		print("All collider: ", result_all.collider, " name: ", result_all.collider.name)
+	
+	# 判断命中的是什么
+	if result_all:
+		var hit_collider = result_all.collider
+		final_hit_point = result_all.position
+		final_hit_normal = result_all.normal
+		
+		# 检查是否是 Hitbox（Area3D）
+		if hit_collider is Area3D:
+			# 命中了 Hitbox！
+			hit_something = true
+			final_hit_collider = hit_collider
+			
+			# 检测是否是头部 Hitbox
+			var check_node = final_hit_collider
+			while check_node:
+				if "Head" in check_node.name or "head" in check_node.name:
+					is_headshot = true
+					break
+				check_node = check_node.get_parent()
+			
+			# 造成伤害
+			if final_hit_collider.has_method("hit"):
+				var dmg = 35.0 if current_weapon_index == 1 else 20.0
+				final_hit_collider.hit(dmg, is_headshot)
+				print("Hit Hitbox: ", final_hit_collider.name, " is_headshot: ", is_headshot)
+		else:
+			# 命中了物理碰撞体（敌人身体或地图）
+			# 检查这个碰撞体是否属于敌人
+			if hit_collider.has_method("hit"):
+				# 是敌人！造成身体伤害
+				hit_something = true
+				final_hit_collider = hit_collider
+				hit_collider.hit(35.0 if current_weapon_index == 1 else 20.0, false)
+				print("Hit Enemy Body: ", hit_collider.name)
+			else:
+				# 是地图或其他环境
+				print("Hit Environment: ", hit_collider.name)
+	
+	# --------------------------
+	
+	# 播放枪声（区分单发/连发）
+	if gunfire_sound:
+		var sound_to_play : AudioStream
+		if current_weapon_index == 1:
+			# 主武器：根据是否首发选择音效
+			sound_to_play = primary_single_fire_sound if is_first_shot_in_burst else primary_auto_fire_sound
+			if sound_to_play == null:  # 如果没设置连发音效，回退到单发
+				sound_to_play = primary_single_fire_sound if primary_single_fire_sound else primary_auto_fire_sound
+		else:
+			# 副武器：使用通用音效
+			sound_to_play = secondary_fire_sound
+		
+		if sound_to_play:
+			# 只在音效改变时才设置 stream，避免打断正在播放的音效
+			if gunfire_sound.stream != sound_to_play:
+				gunfire_sound.stream = sound_to_play
+			gunfire_sound.pitch_scale = randf_range(0.95, 1.05)
+			gunfire_sound.play()
+		
+		# 发射声音信号，让 AI 能听到枪声
+		emit_signal("player_made_sound", global_position, "gunshot", 1.0)
+	
+	# 标记不再是首发
+	is_first_shot_in_burst = false
+	
+	# 调试输出
+	if is_headshot:
+		print("HEADSHOT! Enemy should die instantly!")
+	
+	# 播放击中音效
+	if hit_something and impact_sound_player and impact_sound:
+		impact_sound_player.global_position = final_hit_point
+		if impact_sound_player.stream != impact_sound:
+			impact_sound_player.stream = impact_sound
+		impact_sound_player.pitch_scale = randf_range(0.9, 1.1)
+		impact_sound_player.play()
+	
+	# 2. 应用程序化后坐力 (Recoil)
+	var strength = primary_recoil_strength if current_weapon_index == 1 else secondary_recoil_strength
+	# 随机水平/垂直后坐力，垂直力加强
+	var recoil_h = randf_range(-strength * 0.3, strength * 0.3)
+	var recoil_v = strength * randf_range(0.8, 1.2)
+	
+	recoil_pivot += Vector3(recoil_v, recoil_h, 0)
+	
+	# 3. 产生抛壳
+	spawn_shell()
+	
+	# 4. 枪口闪光
+	show_flash()
+	
+	# 5. 消耗弹药
+	if current_weapon_index == 1:
+		primary_magazines[primary_current_mag_index] -= 1
+	else:
+		secondary_magazines[secondary_current_mag_index] -= 1
+	
+	update_ammo_display()
+
+func show_flash():
+	var flash = primary_flash if current_weapon_index == 1 else secondary_flash
+	flash.visible = true
+	await get_tree().create_timer(0.05).timeout
+	flash.visible = false
+
+func reload():
+	if is_reloading:
+		return
+	
+	var mags = primary_magazines if current_weapon_index == 1 else secondary_magazines
+	var current_idx = primary_current_mag_index if current_weapon_index == 1 else secondary_current_mag_index
+	
+	# 收集所有非空的备用弹匣索引
+	var available_mags : Array[int] = []
+	for i in range(mags.size()):
+		if i != current_idx and mags[i] > 0:
+			available_mags.append(i)
+	
+	# 没有可用弹匣
+	if available_mags.is_empty():
+		return
+	
+	# 播放换弹音效
+	if reload_sound_player and reload_sound:
+		reload_sound_player.stream = reload_sound
+		reload_sound_player.play()
+	
+	# 发射换弹声音信号，让 AI 能听到
+	emit_signal("player_made_sound", global_position, "reload", 0.8)
+	
+	# 随机选择一个弹匣
+	var next_mag_idx = available_mags[randi() % available_mags.size()]
+	
+	is_reloading = true
+	
+	var reload_time = primary_reload_time if current_weapon_index == 1 else secondary_reload_time
+	await get_tree().create_timer(reload_time).timeout
+	
+	# 切换到新弹匣
+	if current_weapon_index == 1:
+		primary_current_mag_index = next_mag_idx
+	else:
+		secondary_current_mag_index = next_mag_idx
+	
+	is_reloading = false
+	
+	update_ammo_display()
+
+func update_ammo_display():
+	if not ammo_hud:
+		return
+	
+	var mags = primary_magazines if current_weapon_index == 1 else secondary_magazines
+	var current_idx = primary_current_mag_index if current_weapon_index == 1 else secondary_current_mag_index
+	var mag_capacity = primary_mag_capacity if current_weapon_index == 1 else secondary_mag_capacity
+	
+	var container = ammo_hud.get_node("AmmoContainer/VBoxContainer/MagazineContainer")
+	
+	# 清除旧的弹匣图标
+	for child in container.get_children():
+		child.queue_free()
+	
+	# 遍历所有弹匣，创建图标
+	for i in range(mags.size()):
+		var fill_percent = float(mags[i]) / float(mag_capacity)
+		var is_current = (i == current_idx)
+		var mag_icon = create_magazine_icon(fill_percent, is_current)
+		container.add_child(mag_icon)
+
+func create_magazine_icon(fill_percent: float, is_current: bool) -> Control:
+	var mag = ColorRect.new()
+	mag.custom_minimum_size = Vector2(12, 40)
+	
+	# 量化填充百分比到几个档位（更真实的战场感知）
+	var display_fill : float
+	if fill_percent > 0.85:
+		display_fill = 1.0  # 满
+	elif fill_percent > 0.6:
+		display_fill = 0.75 # 大半
+	elif fill_percent > 0.35:
+		display_fill = 0.5  # 一半
+	elif fill_percent > 0.1:
+		display_fill = 0.25 # 少量
+	else:
+		display_fill = 0.0  # 空
+	
+	# 根据填充百分比和是否为当前弹匣设置颜色
+	if is_current:
+		if display_fill >= 0.75:
+			mag.color = Color(0.2, 1.0, 0.3, 1) # 绿色 - 当前弹匣充足
+		elif display_fill >= 0.35:
+			mag.color = Color(1.0, 0.8, 0.2, 1) # 黄色 - 当前弹匣中等
+		else:
+			mag.color = Color(1.0, 0.3, 0.2, 1) # 红色 - 当前弹匣不足
+	else:
+		if fill_percent >= 1.0:
+			mag.color = Color(0.7, 0.7, 0.7, 0.8) # 灰白色 - 满弹匣
+		else:
+			mag.color = Color(0.5, 0.5, 0.5, 0.6) # 深灰色 - 部分弹匣
+	
+	# 添加边框
+	var border = ColorRect.new()
+	border.set_anchors_preset(Control.PRESET_FULL_RECT)
+	border.color = Color(0.2, 0.2, 0.2, 1)
+	border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mag.add_child(border)
+	
+	# 填充指示器（使用量化后的值）
+	if display_fill > 0:
+		var fill = ColorRect.new()
+		fill.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		fill.anchor_top = 1.0 - display_fill
+		fill.offset_top = 2
+		fill.offset_bottom = -2
+		fill.offset_left = 2
+		fill.offset_right = -2
+		fill.color = mag.color
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		border.add_child(fill)
+	
+	return mag
+
+func spawn_shell():
+	if not shell_scene: return
+	
+	# 播放抛壳音效
+	if shell_eject_sound_player and shell_eject_sound:
+		shell_eject_sound_player.stream = shell_eject_sound
+		shell_eject_sound_player.pitch_scale = randf_range(0.9, 1.1)
+		shell_eject_sound_player.play()
+	
+	var eject_marker = primary_eject if current_weapon_index == 1 else secondary_eject
+	var shell = shell_scene.instantiate()
+	get_tree().root.add_child(shell)
+	
+	shell.global_transform = eject_marker.global_transform
+	# 向侧后上方弹射 (修正力度和方向)
+	# 此时 eject_marker 随着枪旋转，所以侧向应该是 global_transform.basis.y? 不，
+	# 我们的模型是 X-forward (MCX) 或 -Z-forward (Glock)
+	# 这里的 eject_marker.global_transform.basis.x 是 MCX 的前方，所以 y 是上方，z 是侧方
+	var right_dir = eject_marker.global_transform.basis.z 
+	var up_dir = eject_marker.global_transform.basis.y
+	var back_dir = -eject_marker.global_transform.basis.x if current_weapon_index == 1 else eject_marker.global_transform.basis.z
+	
+	if current_weapon_index == 2: # Glock 是 180度反的
+		right_dir = -eject_marker.global_transform.basis.x
+		up_dir = eject_marker.global_transform.basis.y
+		back_dir = eject_marker.global_transform.basis.z
+
+	var impulse = right_dir * randf_range(1.5, 2.5) + up_dir * randf_range(0.5, 1.5) + back_dir * randf_range(0.5, 1.0)
+	shell.apply_impulse(impulse)
+	shell.apply_torque_impulse(Vector3(randf(), randf(), randf()) * 0.1)
+
+
+func handle_recoil_physics(delta: float):
+	# 后坐力回复
+	recoil_pivot = recoil_pivot.lerp(Vector3.ZERO, recoil_recovery_speed * delta)
+	current_recoil = current_recoil.lerp(recoil_pivot, recoil_snap_speed * delta)
+	
+	# 应用到相机旋转 (累加到 look_rotation)
+	# 开镜时后坐力表现更明显/稳定
+	main_camera.rotation.x = deg_to_rad(current_recoil.x)
+	main_camera.rotation.z = deg_to_rad(current_recoil.y) # 轻微侧偏
+
+	
+	# 武器视觉后退 (Kickback)
+	var kickback_amount = current_recoil.x * 0.05
+	weapon_holder.position.z = lerp(weapon_holder.position.z, weapon_normal_pos.z + kickback_amount, recoil_snap_speed * delta)
+
+func start_weapon_switch(index: int):
+	is_switching = true
+	if is_ads: toggle_camera(false) # 切枪时强制关镜
+	
+	# 切枪打断换弹
+	if is_reloading:
+		is_reloading = false
+		if reload_sound_player:
+			reload_sound_player.stop()
+		if ammo_hud:
+			var label = ammo_hud.get_node_or_null("AmmoContainer/ReloadLabel")
+			if label: label.visible = false
+	
+	next_weapon_index = index
+
+func handle_weapon_switching(delta: float):
+	if not is_switching:
+		switch_weight = move_toward(switch_weight, 0.0, delta * 4.0)
+		return
+	
+	# 下沉动画
+	switch_weight = move_toward(switch_weight, 1.0, delta * 4.0)
+	
+	if switch_weight >= 1.0:
+		# 交换武器
+		for i in range(len(weapon_list)):
+			weapon_list[i].visible = (i + 1 == next_weapon_index)
+		
+		current_weapon_index = next_weapon_index
+		
+		# 更新 ADS 参数
+		if current_weapon_index == 1:
+			ads_camera_pos = primary_ads_pos
+			target_ads_fov = primary_ads_fov
+			if wall_detector: wall_detector.target_position.y = -primary_wall_dist
+		else:
+			ads_camera_pos = secondary_ads_pos
+			target_ads_fov = secondary_ads_fov
+			if wall_detector: wall_detector.target_position.y = -secondary_wall_dist
+			
+		is_switching = false # 切换完成，开始升起
+		update_ammo_display() # 更新弹药显示
+
+func handle_movement(delta):
+	# 计算基础速度（考虑疾跑和姿态）
+	var stance_mult : float = 1.0
+	match current_stance:
+		Stance.CROUCHING:
+			stance_mult = crouch_speed_mult
+		Stance.PRONE:
+			stance_mult = prone_speed_mult
+	
+	var move_speed = base_speed * stance_mult
+	
+	# 站立或蹲下时可以疾跑
+	if can_sprint and Input.is_action_pressed("sprint") and current_stance != Stance.PRONE:
+		var sprint_mult = 1.0 if current_stance == Stance.STANDING else crouch_sprint_mult
+		move_speed = sprint_speed * sprint_mult
+	
+	var input_dir := Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
+	var direction = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
+	if direction:
+		velocity.x = direction.x * move_speed
+		velocity.z = direction.z * move_speed
+	else:
+		velocity.x = move_toward(velocity.x, 0, move_speed)
+		velocity.z = move_toward(velocity.z, 0, move_speed)
+	
+	# 计算水平速度用于脚步音效
+	var horizontal_speed = Vector2(velocity.x, velocity.z).length()
+	
+	if horizontal_speed > 0.1 and is_on_floor():
+		footstep_timer -= delta
+		if footstep_timer <= 0:
+			# 播放脚步声
+			if footstep_sound_player and footstep_sound:
+				footstep_sound_player.stream = footstep_sound
+				footstep_sound_player.pitch_scale = randf_range(0.9, 1.1)
+				footstep_sound_player.play()
+			
+			# 发射脚步声音信号，让 AI 能听到
+			emit_signal("player_made_sound", global_position, "footstep", 0.5)
+			
+			# 根据移动速度调整脚步间隔，跑得越快音效越密集
+			var speed_factor = horizontal_speed / sprint_speed
+			footstep_interval = lerp(0.5, 0.3, speed_factor)
+			footstep_timer = footstep_interval
+	else:
+		# 不在移动时重置计时器
+		footstep_timer = 0.3
+	
+	if can_jump and is_on_floor() and Input.is_action_just_pressed("ui_accept"):
+		velocity.y = jump_velocity
+		target_stance = Stance.STANDING # 跳跃打断蹲趴
+		lean_target_state = 0 # 跳跃打断探头
+
+func capture_mouse():
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	mouse_captured = true
+
+func release_mouse():
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	mouse_captured = false
+
+func check_input_mappings():
+	var actions = ["ui_left", "ui_right", "ui_up", "ui_down"]
+	for action in actions:
+		if not InputMap.has_action(action):
+			push_warning("未找到输入映射: " + action)
+
+func hit(damage : float, is_headshot : bool = false):
+	# 爆头直接秒杀
+	if is_headshot:
+		current_health = 0
+		print("Player HEADSHOT! Instant death.")
+	else:
+		current_health -= damage
+		print("Player HIT! Damage: ", damage, " Health: ", current_health)
+	
+	# 播放受击音效
+	if impact_sound_player and impact_sound:
+		impact_sound_player.stream = impact_sound
+		impact_sound_player.pitch_scale = randf_range(0.8, 1.2)
+		impact_sound_player.play()
+	
+	if current_health <= 0:
+		die()
+
+func die():
+	print("Player DIED!")
+	# Simple restart or game over logic
+	get_tree().reload_current_scene()

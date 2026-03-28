@@ -1,0 +1,248 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://MainMenu.gd" id="1_script"]
+[ext_resource type="Shader" path="res://blur.gdshader" id="2_shader"]
+[ext_resource type="PackedScene" path="res://MapBackground.tscn" id="3_map"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_blur"]
+shader = ExtResource("2_shader")
+shader_parameter/blur_amount = 3.0
+
+[sub_resource type="LabelSettings" id="LabelSettings_title"]
+font_size = 64
+
+[sub_resource type="LabelSettings" id="LabelSettings_btn"]
+font_size = 24
+
+[node name="MainMenuScene" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="Background3D" type="SubViewportContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="Background3D"]
+size = Vector2i(640, 360)
+
+[node name="MapScene" parent="Background3D/SubViewport" instance=ExtResource("3_map")]
+
+[node name="BlurOverlay" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+material = SubResource("ShaderMaterial_blur")
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 30.0
+offset_bottom = 100.0
+text = "战术射击"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_title")
+
+[node name="MainMenu" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -160.0
+offset_right = 200.0
+offset_bottom = 160.0
+theme_override_constants/separation = 20
+
+[node name="DifficultyContainer" type="HBoxContainer" parent="MainMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+
+[node name="DifficultyBtnLeft" type="Button" parent="MainMenu/DifficultyContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(60, 50)
+text = "<<"
+
+[node name="DifficultyLabel" type="Label" parent="MainMenu/DifficultyContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "难度: 普通"
+horizontal_alignment = 1
+vertical_alignment = 1
+label_settings = SubResource("LabelSettings_btn")
+
+[node name="DifficultyBtnRight" type="Button" parent="MainMenu/DifficultyContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(60, 50)
+text = ">>"
+
+[node name="StartBtn" type="Button" parent="MainMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+text = "开始游戏"
+label_settings = SubResource("LabelSettings_btn")
+
+[node name="SettingsBtn" type="Button" parent="MainMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+text = "设置"
+label_settings = SubResource("LabelSettings_btn")
+
+[node name="QuitBtn" type="Button" parent="MainMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+text = "退出游戏"
+label_settings = SubResource("LabelSettings_btn")
+
+[node name="SettingsMenu" type="VBoxContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -250.0
+offset_top = -280.0
+offset_right = 250.0
+offset_bottom = 280.0
+theme_override_constants/separation = 15
+
+[node name="SettingsTitle" type="Label" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "设置"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_btn")
+
+[node name="HSeparator" type="HSeparator" parent="SettingsMenu"]
+layout_mode = 2
+
+[node name="QualityContainer" type="HBoxContainer" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 45)
+
+[node name="QualityBtnLeft" type="Button" parent="SettingsMenu/QualityContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(50, 45)
+text = "<<"
+
+[node name="QualityLabel" type="Label" parent="SettingsMenu/QualityContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "画质: 高"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="QualityBtnRight" type="Button" parent="SettingsMenu/QualityContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(50, 45)
+text = ">>"
+
+[node name="SoundContainer" type="HBoxContainer" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 45)
+
+[node name="SoundLabel" type="Label" parent="SettingsMenu/SoundContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "声音:"
+
+[node name="SoundToggle" type="CheckBox" parent="SettingsMenu/SoundContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 45)
+button_pressed = true
+text = "开启"
+
+[node name="VolumeContainer" type="HBoxContainer" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+
+[node name="VolumeLabel" type="Label" parent="SettingsMenu/VolumeContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "音量:"
+
+[node name="VolumeSlider" type="HSlider" parent="SettingsMenu/VolumeContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.0
+max_value = 100.0
+value = 100.0
+
+[node name="SensitivityContainer" type="HBoxContainer" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+
+[node name="SensitivityLabel" type="Label" parent="SettingsMenu/SensitivityContainer"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 0)
+text = "灵敏度:"
+
+[node name="SensitivitySlider" type="HSlider" parent="SettingsMenu/SensitivityContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.5
+max_value = 5.0
+value = 2.0
+
+[node name="HSeparator2" type="HSeparator" parent="SettingsMenu"]
+layout_mode = 2
+
+[node name="KeyTitle" type="Label" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 30)
+text = "键位设置 (点击修改)"
+horizontal_alignment = 1
+
+[node name="KeyForward" type="Button" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "前进: W"
+
+[node name="KeyBack" type="Button" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "后退: S"
+
+[node name="KeyLeft" type="Button" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "左移: A"
+
+[node name="KeyRight" type="Button" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "右移: D"
+
+[node name="BackBtn" type="Button" parent="SettingsMenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+text = "返回主菜单"
+
+[connection signal="pressed" from="MainMenu/DifficultyContainer/DifficultyBtnLeft" to="." method="_on_difficulty_left_pressed"]
+[connection signal="pressed" from="MainMenu/DifficultyContainer/DifficultyBtnRight" to="." method="_on_difficulty_right_pressed"]
+[connection signal="pressed" from="MainMenu/StartBtn" to="." method="_on_start_pressed"]
+[connection signal="pressed" from="MainMenu/SettingsBtn" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="MainMenu/QuitBtn" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="SettingsMenu/QualityContainer/QualityBtnLeft" to="." method="_on_quality_left_pressed"]
+[connection signal="pressed" from="SettingsMenu/QualityContainer/QualityBtnRight" to="." method="_on_quality_right_pressed"]
+[connection signal="toggled" from="SettingsMenu/SoundToggle" to="." method="_on_sound_toggled"]
+[connection signal="value_changed" from="SettingsMenu/VolumeSlider" to="." method="_on_volume_changed"]
+[connection signal="value_changed" from="SettingsMenu/SensitivitySlider" to="." method="_on_sensitivity_changed"]
+[connection signal="pressed" from="SettingsMenu/KeyForward" to="." method="_on_key_forward_pressed"]
+[connection signal="pressed" from="SettingsMenu/KeyBack" to="." method="_on_key_back_pressed"]
+[connection signal="pressed" from="SettingsMenu/KeyLeft" to="." method="_on_key_left_pressed"]
+[connection signal="pressed" from="SettingsMenu/KeyRight" to="." method="_on_key_right_pressed"]
+[connection signal="pressed" from="SettingsMenu/BackBtn" to="." method="_on_back_pressed"]

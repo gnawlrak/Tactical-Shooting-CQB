@@ -1,0 +1,82 @@
+[gd_scene format=3 uid="uid://cj2gjbkky7oi8"]
+
+[ext_resource type="Script" uid="uid://bllg0kqqrfgh" path="res://addons/proto_controller/AllyAI.gd" id="1_ally"]
+[ext_resource type="PackedScene" uid="uid://cpdeav0u32xtt" path="res://models/low-poly_sig_mcx.glb" id="2_mcx"]
+[ext_resource type="Script" uid="uid://dyjhm0beaf4hd" path="res://addons/proto_controller/Hitbox.gd" id="3_hitbox"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.3
+height = 0.78339845
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_blue"]
+albedo_color = Color(0.2, 0.5, 0.9, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_visual"]
+material = SubResource("StandardMaterial3D_blue")
+radius = 0.3
+height = 1.2
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_head"]
+radius = 0.25
+
+[node name="AllyAI" type="CharacterBody3D" unique_id=1038907900 groups=["allies", "ally"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.29885197, 0)
+collision_layer = 2
+collision_mask = 3
+script = ExtResource("1_ally")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=587201941]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=703900463]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_visual")
+
+[node name="Head" type="Node3D" parent="." unique_id=504916282]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+
+[node name="WeaponPivot" type="Node3D" parent="Head" unique_id=54831272]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.2, -0.2, 0)
+
+[node name="MCX" parent="Head/WeaponPivot" unique_id=737331756 instance=ExtResource("2_mcx")]
+transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0.115, -0.342, 0.265)
+
+[node name="Muzzle" type="Marker3D" parent="Head/WeaponPivot/MCX" unique_id=1942891926]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0.8)
+
+[node name="AimRay" type="RayCast3D" parent="Head/WeaponPivot" unique_id=1570299846]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.115780875, -0.29402328, 0.099321544)
+target_position = Vector3(0, 0, -50)
+collision_mask = 7
+collide_with_areas = true
+
+[node name="ShootSound" type="AudioStreamPlayer3D" parent="." unique_id=966583172]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.3150648, 1.106357, 0.73247194)
+max_distance = 50.0
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="." unique_id=772938515]
+avoidance_enabled = true
+
+[node name="AvailableHitboxes" type="Node3D" parent="." unique_id=1449810108]
+
+[node name="HeadHitbox" type="Area3D" parent="AvailableHitboxes" unique_id=939403029]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2443527, 0)
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("3_hitbox")
+is_weak_spot = true
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="AvailableHitboxes/HeadHitbox" unique_id=1748444347]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.005571246, 0)
+shape = SubResource("SphereShape3D_head")
+
+[node name="BodyHitbox" type="Area3D" parent="AvailableHitboxes" unique_id=1271373702]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("3_hitbox")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="AvailableHitboxes/BodyHitbox" unique_id=324995733]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.2083008, 0)
+shape = SubResource("CapsuleShape3D_body")
