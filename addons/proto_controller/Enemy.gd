@@ -197,16 +197,10 @@ func has_line_of_sight_to_target() -> bool:
 		check_points.append(wp)
 	
 	for point in check_points:
-		var query = PhysicsRayQueryParameters3D.create(
-			head.global_position,
-			point
-		)
+		var query = PhysicsRayQueryParameters3D.create(head.global_position, point)
 		query.exclude = [self]
-		query.collision_mask = 1  # 只检测静态物体
-		
+		query.collision_mask = 1
 		var result = space_state.intersect_ray(query)
-		
-		# 没有碰撞，或者碰撞到玩家，都算可见
 		if not result:
 			return true
 		if is_part_of_target(result.collider):

@@ -146,11 +146,26 @@ var recoil_pivot : Vector3 = Vector3.ZERO # The target recoil rotation
 var has_fired_this_click : bool = false
 var is_first_shot_in_burst : bool = true
 
+enum FireMode { FULL_AUTO, BURST_3, SINGLE_FIRE }
+var current_fire_mode : int = FireMode.FULL_AUTO
+var burst_shots_fired : int = 0
+var is_bursting : bool = false
+
 var primary_magazines : Array[int] = []  # 弹匣数组，每个元素是该弹匣的当前弹药数
 var primary_current_mag_index : int = 0  # 当前装填的弹匣索引
 var secondary_magazines : Array[int] = []
 var secondary_current_mag_index : int = 0
 var is_reloading : bool = false
+var reload_anim_time : float = 0.0
+var reload_anim_duration : float = 2.0
+var reload_weapon_start_pos : Vector3
+var reload_weapon_start_rot : Vector3
+
+var is_inspecting : bool = false
+var inspect_anim_time : float = 0.0
+var inspect_anim_duration : float = 3.5
+var inspect_weapon_start_pos : Vector3
+var inspect_weapon_start_rot : Vector3
 
 var current_stance : int = Stance.STANDING
 var target_stance : int = Stance.STANDING
@@ -243,35 +258,43 @@ func _unhandled_input(event: InputEvent) -> void:
 	if mouse_captured and event is InputEventMouseMotion:
 		rotate_look(event.relative)
 	
-	# 武器切换快捷键
+	# 使用输入映射的动作
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_1 and current_weapon_index != 1 and not is_switching:
+		# 武器切换
+		if Input.is_action_just_pressed("weapon_1") and current_weapon_index != 1 and not is_switching and not is_reloading:
 			start_weapon_switch(1)
-		elif event.keycode == KEY_2 and current_weapon_index != 2 and not is_switching:
+		elif Input.is_action_just_pressed("weapon_2") and current_weapon_index != 2 and not is_switching and not is_reloading:
 			start_weapon_switch(2)
 		
-		# 探头切换逻辑
-		if event.keycode == KEY_Q:
+		# 探头切换
+		if Input.is_action_just_pressed("lean_left"):
 			lean_target_state = -1 if lean_target_state != -1 else 0
-		elif event.keycode == KEY_E:
+		elif Input.is_action_just_pressed("lean_right"):
 			lean_target_state = 1 if lean_target_state != 1 else 0
 		
-		# 换弹快捷键
-		elif event.keycode == KEY_R:
-			if not is_reloading:
-				reload()
+		# 换弹
+		if Input.is_action_just_pressed("reload") and not is_reloading:
+			reload()
 		
 		# 姿态切换
-		elif event.keycode == KEY_C:
+		if Input.is_action_just_pressed("crouch"):
 			if current_stance == Stance.CROUCHING:
 				target_stance = Stance.STANDING
 			else:
 				target_stance = Stance.CROUCHING
-		elif event.keycode == KEY_V:
+		elif Input.is_action_just_pressed("prone"):
 			if current_stance == Stance.PRONE:
 				target_stance = Stance.STANDING
 			else:
 				target_stance = Stance.PRONE
+		
+		# 检视枪械
+		if Input.is_action_just_pressed("inspect") and not is_inspecting and not is_reloading and not is_switching:
+			start_inspect()
+		
+		# 切换射击模式
+		if event.keycode == KEY_G and current_weapon_index == 1:
+			toggle_fire_mode()
 	
 	# 右键瞄准逻辑 (修复被删掉的部分)
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
@@ -288,6 +311,8 @@ func _physics_process(delta: float) -> void:
 	handle_weapon_avoidance(delta)
 	handle_stance(delta) # 先算姿态和高度
 	handle_weapon_switching(delta)
+	handle_reload_animation(delta) # 换弹动画
+	handle_inspect_animation(delta) # 检视动画
 	handle_shooting(delta) # 后算射击，保证位置准确
 	handle_recoil_physics(delta)
 	
@@ -305,6 +330,10 @@ func _physics_process(delta: float) -> void:
 ## --- 避墙逻辑实现（含自动恢复开镜） ---
 func handle_weapon_avoidance(delta: float):
 	if not wall_detector or not weapon_holder: return
+	
+	# 换弹或检视期间跳过避墙逻辑，让动画控制武器
+	if is_reloading or is_inspecting:
+		return
 
 	if wall_detector.is_colliding():
 		var collision_normal = wall_detector.get_collision_normal()
@@ -481,39 +510,65 @@ func handle_stance(delta: float):
 		if wall_detector:
 			wall_detector.position.x = ads_camera.position.x
 
+func toggle_fire_mode():
+	if current_weapon_index != 1:
+		return
+	current_fire_mode = (current_fire_mode + 1) % 3
+	is_bursting = false
+	match current_fire_mode:
+		FireMode.FULL_AUTO:
+			print("切换射击模式：全自动")
+		FireMode.BURST_3:
+			print("切换射击模式：三连发")
+		FireMode.SINGLE_FIRE:
+			print("切换射击模式：单发")
+
 func handle_shooting(delta: float):
 	if fire_cooldown > 0:
 		fire_cooldown -= delta
 	
 	var is_trigger_pressed = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 	
-	# 重置半自动触发和连发标志
-	if not is_trigger_pressed:
+	if not is_trigger_pressed and not is_bursting:
 		has_fired_this_click = false
 		is_first_shot_in_burst = true
 		return
 		
-	# 正在切枪、撞墙或换弹中不可开火
 	if is_switching or wall_detector.is_colliding() or is_reloading:
+		is_bursting = false
 		return
 	
-	# 检查弹药
 	var current_mags = primary_magazines if current_weapon_index == 1 else secondary_magazines
 	var current_mag_idx = primary_current_mag_index if current_weapon_index == 1 else secondary_current_mag_index
 	if current_mags[current_mag_idx] <= 0:
-		# 播放空枪点击声
+		is_bursting = false
 		if not has_fired_this_click and dry_fire_sound_player and dry_fire_sound:
 			dry_fire_sound_player.stream = dry_fire_sound
 			dry_fire_sound_player.play()
 			has_fired_this_click = true
 		return
 	
-	# 射击逻辑区分
-	if current_weapon_index == 1: # 步枪：全自动
-		if fire_cooldown <= 0:
-			fire()
-	else: # 手枪：半自动
-		if not has_fired_this_click and fire_cooldown <= 0:
+	if current_weapon_index == 1:
+		if current_fire_mode == FireMode.FULL_AUTO:
+			if is_trigger_pressed and fire_cooldown <= 0:
+				fire()
+		elif current_fire_mode == FireMode.BURST_3:
+			if is_trigger_pressed and not has_fired_this_click and not is_bursting:
+				is_bursting = true
+				burst_shots_fired = 0
+				has_fired_this_click = true
+			
+			if is_bursting and fire_cooldown <= 0:
+				fire()
+				burst_shots_fired += 1
+				if burst_shots_fired >= 3:
+					is_bursting = false
+		elif current_fire_mode == FireMode.SINGLE_FIRE:
+			if is_trigger_pressed and not has_fired_this_click and fire_cooldown <= 0:
+				fire()
+				has_fired_this_click = true
+	else:
+		if is_trigger_pressed and not has_fired_this_click and fire_cooldown <= 0:
 			fire()
 			has_fired_this_click = true
 
@@ -708,7 +763,7 @@ func show_flash():
 	flash.visible = false
 
 func reload():
-	if is_reloading:
+	if is_reloading or is_switching:
 		return
 	
 	var mags = primary_magazines if current_weapon_index == 1 else secondary_magazines
@@ -724,6 +779,10 @@ func reload():
 	if available_mags.is_empty():
 		return
 	
+	# 如果正在瞄准，先关闭瞄准
+	if is_ads:
+		toggle_camera(false)
+	
 	# 播放换弹音效
 	if reload_sound_player and reload_sound:
 		reload_sound_player.stream = reload_sound
@@ -737,8 +796,14 @@ func reload():
 	
 	is_reloading = true
 	
-	var reload_time = primary_reload_time if current_weapon_index == 1 else secondary_reload_time
-	await get_tree().create_timer(reload_time).timeout
+	# 启动换弹动画
+	reload_anim_time = 0.0
+	reload_anim_duration = primary_reload_time if current_weapon_index == 1 else secondary_reload_time
+	reload_weapon_start_pos = weapon_holder.position
+	reload_weapon_start_rot = weapon_holder.rotation
+	
+	# 等待换弹完成
+	await get_tree().create_timer(reload_anim_duration).timeout
 	
 	# 切换到新弹匣
 	if current_weapon_index == 1:
@@ -823,6 +888,92 @@ func create_magazine_icon(fill_percent: float, is_current: bool) -> Control:
 		border.add_child(fill)
 	
 	return mag
+
+func start_inspect():
+	if is_inspecting or is_reloading or is_switching:
+		return
+	
+	# 如果正在瞄准，先关闭瞄准
+	if is_ads:
+		toggle_camera(false)
+	
+	is_inspecting = true
+	inspect_anim_time = 0.0
+	inspect_weapon_start_pos = weapon_holder.position
+	inspect_weapon_start_rot = weapon_holder.rotation
+	
+	# 等待检视动画完成
+	await get_tree().create_timer(inspect_anim_duration).timeout
+	is_inspecting = false
+
+func handle_inspect_animation(delta: float):
+	if not is_inspecting:
+		return
+	
+	inspect_anim_time += delta
+	var progress = inspect_anim_time / inspect_anim_duration
+	
+	# 检视动画分为五个阶段：
+	# 1. 举起阶段 (0-15%): 武器移到屏幕中央偏下
+	# 2. 观察左侧 (15-35%): 展示枪身左侧细节
+	# 3. 观察右侧 (35-55%): 展示枪身右侧细节
+	# 4. 观察顶部 (55-80%): 展示枪机、瞄准镜等顶部细节
+	# 5. 放下阶段 (80-100%): 武器回到原位
+	
+	var target_pos: Vector3
+	var target_rot_x: float
+	var target_rot_y: float
+	var target_rot_z: float
+	
+	# 基础偏移量 - 将武器移到屏幕中央
+	var center_offset = Vector3(0.0, 0.05, -0.15)
+	
+	if progress < 0.15:
+		# 举起阶段 - 武器移到屏幕中央，稍微倾斜
+		var t = progress / 0.15
+		var ease_t = ease_out_quad(t)
+		target_pos = inspect_weapon_start_pos + center_offset * ease_t
+		target_rot_x = inspect_weapon_start_rot.x - deg_to_rad(15) * ease_t
+		target_rot_y = inspect_weapon_start_rot.y
+		target_rot_z = inspect_weapon_start_rot.z + deg_to_rad(5) * ease_t
+	elif progress < 0.35:
+		# 观察左侧 - 向左旋转45度，展示左侧
+		var t = (progress - 0.15) / 0.2
+		var ease_t = ease_in_out_quad(t)
+		target_pos = inspect_weapon_start_pos + center_offset
+		target_rot_x = inspect_weapon_start_rot.x - deg_to_rad(15) + deg_to_rad(10) * ease_t
+		target_rot_y = inspect_weapon_start_rot.y - deg_to_rad(45) * ease_t
+		target_rot_z = inspect_weapon_start_rot.z + deg_to_rad(5)
+	elif progress < 0.55:
+		# 观察右侧 - 向右旋转90度（从-45到+45），展示右侧
+		var t = (progress - 0.35) / 0.2
+		var ease_t = ease_in_out_quad(t)
+		target_pos = inspect_weapon_start_pos + center_offset
+		target_rot_x = inspect_weapon_start_rot.x - deg_to_rad(5)
+		target_rot_y = inspect_weapon_start_rot.y - deg_to_rad(45) + deg_to_rad(90) * ease_t
+		target_rot_z = inspect_weapon_start_rot.z + deg_to_rad(5) - deg_to_rad(10) * ease_t
+	elif progress < 0.8:
+		# 观察顶部 - 向上倾斜，展示枪机和瞄准镜
+		var t = (progress - 0.55) / 0.25
+		var ease_t = ease_in_out_quad(t)
+		target_pos = inspect_weapon_start_pos + center_offset + Vector3(0, 0.1 * ease_t, 0.05 * ease_t)
+		target_rot_x = inspect_weapon_start_rot.x - deg_to_rad(5) - deg_to_rad(50) * ease_t
+		target_rot_y = inspect_weapon_start_rot.y + deg_to_rad(45) - deg_to_rad(45) * ease_t
+		target_rot_z = inspect_weapon_start_rot.z - deg_to_rad(5) + deg_to_rad(5) * ease_t
+	else:
+		# 放下阶段 - 平滑回到原位
+		var t = (progress - 0.8) / 0.2
+		var ease_t = ease_in_quad(t)
+		target_pos = inspect_weapon_start_pos + center_offset * (1.0 - ease_t)
+		target_rot_x = inspect_weapon_start_rot.x - deg_to_rad(55) * (1.0 - ease_t)
+		target_rot_y = inspect_weapon_start_rot.y
+		target_rot_z = inspect_weapon_start_rot.z
+	
+	# 平滑应用动画
+	weapon_holder.position = weapon_holder.position.lerp(target_pos, 12.0 * delta)
+	weapon_holder.rotation.x = lerp_angle(weapon_holder.rotation.x, target_rot_x, 12.0 * delta)
+	weapon_holder.rotation.y = lerp_angle(weapon_holder.rotation.y, target_rot_y, 12.0 * delta)
+	weapon_holder.rotation.z = lerp_angle(weapon_holder.rotation.z, target_rot_z, 12.0 * delta)
 
 func spawn_shell():
 	if not shell_scene: return
@@ -913,6 +1064,80 @@ func handle_weapon_switching(delta: float):
 			
 		is_switching = false # 切换完成，开始升起
 		update_ammo_display() # 更新弹药显示
+
+func handle_reload_animation(delta: float):
+	if not is_reloading:
+		return
+	
+	reload_anim_time += delta
+	var progress = reload_anim_time / reload_anim_duration
+	
+	# 换弹动画分为五个阶段：
+	# 1. 准备阶段 (0-15%): 武器轻微倾斜，准备拔弹夹
+	# 2. 拔弹夹阶段 (15-35%): 武器快速向下移动并大幅倾斜，模拟拔出弹夹
+	# 3. 取新弹夹阶段 (35-55%): 武器保持低位，轻微晃动
+	# 4. 插弹夹阶段 (55-75%): 武器向上移动并回正，模拟插入新弹夹
+	# 5. 完成阶段 (75-100%): 武器回到原位
+	
+	var target_pos: Vector3
+	var target_rot_x: float
+	var target_rot_z: float
+	
+	if progress < 0.15:
+		# 准备阶段 - 轻微倾斜
+		var t = progress / 0.15
+		var ease_t = ease_out_quad(t)
+		target_pos = reload_weapon_start_pos + Vector3(0, -0.05, 0.05) * ease_t
+		target_rot_x = reload_weapon_start_rot.x + deg_to_rad(5) * ease_t
+		target_rot_z = reload_weapon_start_rot.z + deg_to_rad(3) * ease_t
+	elif progress < 0.35:
+		# 拔弹夹阶段 - 快速向下并向右倾斜（模拟右手拔弹夹）
+		var t = (progress - 0.15) / 0.2
+		var ease_t = ease_in_out_quad(t)
+		var pull_offset = Vector3(0.08, -0.35, 0.15)  # 向右下移动
+		target_pos = reload_weapon_start_pos + Vector3(0, -0.05, 0.05) + pull_offset * ease_t
+		target_rot_x = reload_weapon_start_rot.x + deg_to_rad(5) + deg_to_rad(35) * ease_t  # 更大的向下倾斜
+		target_rot_z = reload_weapon_start_rot.z + deg_to_rad(3) + deg_to_rad(20) * ease_t  # 向右倾斜
+	elif progress < 0.55:
+		# 取新弹夹阶段 - 保持低位并晃动
+		var t = (progress - 0.35) / 0.2
+		var wobble_x = sin(t * PI * 6) * 0.015
+		var wobble_y = cos(t * PI * 4) * 0.01
+		var wobble_z = sin(t * PI * 3) * 0.02
+		target_pos = reload_weapon_start_pos + Vector3(0.08 + wobble_x, -0.4 + wobble_y, 0.2)
+		target_rot_x = reload_weapon_start_rot.x + deg_to_rad(40) + deg_to_rad(5) * sin(t * PI * 2)
+		target_rot_z = reload_weapon_start_rot.z + deg_to_rad(23) + deg_to_rad(8) * wobble_z
+	elif progress < 0.75:
+		# 插弹夹阶段 - 向上移动并回正
+		var t = (progress - 0.55) / 0.2
+		var ease_t = ease_out_quad(t)
+		target_pos = reload_weapon_start_pos + Vector3(0.08 * (1.0 - ease_t), -0.4 + 0.35 * ease_t, 0.2 - 0.15 * ease_t)
+		target_rot_x = reload_weapon_start_rot.x + deg_to_rad(40) * (1.0 - ease_t)
+		target_rot_z = reload_weapon_start_rot.z + deg_to_rad(23) * (1.0 - ease_t)
+	else:
+		# 完成阶段 - 回到原位
+		var t = (progress - 0.75) / 0.25
+		var ease_t = ease_in_out_quad(t)
+		target_pos = reload_weapon_start_pos + Vector3(0, -0.05 * (1.0 - ease_t), 0.05 * (1.0 - ease_t))
+		target_rot_x = reload_weapon_start_rot.x + deg_to_rad(5) * (1.0 - ease_t)
+		target_rot_z = reload_weapon_start_rot.z + deg_to_rad(3) * (1.0 - ease_t)
+	
+	# 平滑应用动画
+	weapon_holder.position = weapon_holder.position.lerp(target_pos, 12.0 * delta)
+	weapon_holder.rotation.x = lerp_angle(weapon_holder.rotation.x, target_rot_x, 12.0 * delta)
+	weapon_holder.rotation.z = lerp_angle(weapon_holder.rotation.z, target_rot_z, 12.0 * delta)
+
+func ease_out_quad(t: float) -> float:
+	return 1.0 - (1.0 - t) * (1.0 - t)
+
+func ease_in_quad(t: float) -> float:
+	return t * t
+
+func ease_in_out_quad(t: float) -> float:
+	if t < 0.5:
+		return 2.0 * t * t
+	else:
+		return 1.0 - pow(-2.0 * t + 2.0, 2.0) / 2.0
 
 func handle_movement(delta):
 	# 计算基础速度（考虑疾跑和姿态）

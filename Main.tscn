@@ -212,7 +212,7 @@ transform = Transform3D(-0.017592035, 0, 0.9998454, 0, 1, 0, -0.9998454, 0, -0.0
 role = 1
 
 [node name="Enemy4" parent="." unique_id=1103169706 instance=ExtResource("2_uu6xs")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.0791435, -0.59770393, 3.5406117)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.7020988, 0.050014257, -3.2650437)
 
 [node name="Enemy5" parent="." unique_id=1541808688 instance=ExtResource("2_uu6xs")]
 transform = Transform3D(-0.4299126, 0, 0.9028708, 0, 1, 0, -0.9028708, 0, -0.4299126, 1.68015, -0.07634735, 8.80877)
@@ -227,4 +227,4 @@ transform = Transform3D(0.09527226, 0, 0.9954511, 0, 1, 0, -0.9954511, 0, 0.0952
 [node name="Enemy8" parent="." unique_id=1396359988 instance=ExtResource("2_uu6xs")]
 transform = Transform3D(0.9127272, 0, 0.40856963, 0, 1, 0, -0.40856963, 0, 0.9127272, 3.5422359, 0.1981082, 8.872777)
 
-[node name="PauseMenu" parent="." instance=ExtResource("3_pause")]
+[node name="PauseMenu" parent="." unique_id=1827825552 instance=ExtResource("3_pause")]
