@@ -1,172 +1,172 @@
-# Tactical Shooting CQB
+# Tactical Shooting CQB - 战术射击游戏
 
-A tactical first-person shooter game built with Godot 4, featuring advanced AI systems with roles, sound perception, and guerrilla tactics.
+基于 Godot 4 开发的第一人称射击游戏，具备先进的 AI 系统，包括角色区分、声音感知和游击战术。
 
 ![Godot](https://img.shields.io/badge/Engine-Godot%204.x-478061?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Alpha-orange?style=flat-square)
 
-## 🎮 Game Overview
+## 🎮 游戏简介
 
-**Tactical Shooting CQB** is a PVE first-person shooter focusing on close-quarters combat. Players face off against intelligent AI enemies that utilize cover, teamwork, and tactical movement.
+**Tactical Shooting CQB** 是一款专注于近距离战斗的 PVE 第一人称射击游戏。玩家需要对抗具备智能的 AI 敌人，这些敌人会利用掩体、团队协作和战术移动。
 
-### Features
+### 特色功能
 
-- **Role-Based AI System**: Enemies with distinct roles (Assault, Support, Sniper, Flanker)
-- **Sound Perception**: AI responds to gunshots, footsteps, and reloading
-- **Guerrilla Tactics**: Smart cover selection and tactical repositioning
-- **Squad Coordination**: Enemies share target information and coordinate attacks
-- **Multi-Weapon Support**: Multiple firearms with unique sound profiles
+- **角色系统 AI**：敌人分为不同角色（突击手、支援手、狙击手、侧翼手）
+- **声音感知**：AI 能响应枪声、脚步声和换弹声
+- **游击战术**：智能掩体选择和战术重新定位
+- **小队协作**：敌人共享目标信息并协调攻击
+- **多武器支持**：多种具有独特声音特征的枪械
 
-## 🛠️ Tech Stack
+## 🛠️ 技术栈
 
-| Component | Technology |
-|-----------|------------|
-| Engine | Godot 4.x |
-| Language | GDScript |
-| Models | GLB format |
-| Audio | MP3 |
+| 组件 | 技术 |
+|------|------|
+| 引擎 | Godot 4.x |
+| 语言 | GDScript |
+| 模型 | GLB 格式 |
+| 音频 | MP3 |
 
-## 📁 Project Structure
+## 📁 项目结构
 
 ```
 Tactical-Shooting-CQB/
 ├── addons/
-│   └── proto_controller/      # Core player/enemy controllers
-│       ├── Enemy.gd           # AI logic (4500+ lines)
-│       ├── AllyAI.gd          # Friendly AI
-│       └── proto_controller.gd # Player controller
-├── models/                     # 3D models & textures
-│   ├── ak-47_kalashnikov.glb  # Weapons
-│   ├── john_wicks_glock*.glb  # Handguns
-│   └── 5_*.png                # Character textures
-├── sounds/                     # Audio files
-│   ├── mcx半自动.mp3          # Gun sounds
-│   ├── 弹壳落地.mp3           # Shell casings
-│   └── 换弹.mp3               # Reloading
-├── Main.tscn                   # Main scene
-├── MainMenu.gd                 # Menu logic
-└── project.godot              # Project config
+│   └── proto_controller/      # 核心玩家/敌人控制器
+│       ├── Enemy.gd           # AI 逻辑 (4500+ 行)
+│       ├── AllyAI.gd          # 友军 AI
+│       └── proto_controller.gd # 玩家控制器
+├── models/                     # 3D 模型和纹理
+│   ├── ak-47_kalashnikov.glb  # 武器
+│   ├── john_wicks_glock*.glb  # 手枪
+│   └── 5_*.png                # 角色纹理
+├── sounds/                     # 音频文件
+│   ├── mcx半自动.mp3          # 枪声
+│   ├── 弹壳落地.mp3           # 弹壳落地
+│   └── 换弹.mp3               # 换弹
+├── Main.tscn                   # 主场景
+├── MainMenu.gd                 # 菜单逻辑
+└── project.godot              # 项目配置
 ```
 
-## 🚀 Getting Started
+## 🚀 开始运行
 
-### Prerequisites
+### 环境要求
 
-- [Godot Engine 4.x](https://godotengine.org/download) (Standard version)
-- ~500MB disk space
+- [Godot Engine 4.x](https://godotengine.org/download)（标准版）
+- 约 500MB 磁盘空间
 
-### Running the Game
+### 运行游戏
 
-1. Clone the repository:
+1. 克隆仓库：
    ```bash
    git clone https://github.com/gnawlrak/Tactical-Shooting-CQB.git
    ```
 
-2. Open the project in Godot 4
+2. 用 Godot 4 打开项目
 
-3. Press **F5** or click **Run** to start
+3. 按 **F5** 或点击 **运行** 启动
 
-### Controls
+### 按键操作
 
-| Key | Action |
-|-----|--------|
-| WASD | Move |
-| Mouse | Look |
-| Left Click | Shoot |
-| R | Reload |
-| Space | Jump |
-| Shift | Sprint |
-| E | Interact |
-| ESC | Pause |
+| 按键 | 动作 |
+|------|------|
+| WASD | 移动 |
+| 鼠标 | 视角 |
+| 左键 | 射击 |
+| R | 换弹 |
+| 空格 | 跳跃 |
+| Shift | 冲刺 |
+| E | 交互 |
+| ESC | 暂停 |
 
-## 🤖 AI Systems
+## 🤖 AI 系统
 
-### 1. Role-Based Enemies
+### 1. 角色区分系统
 
-| Role | Behavior |
-|------|----------|
-| **ASSAULT** | High mobility, close-range combat, aggressive flanking |
-| **SUPPORT** | Fire suppression, medium-range, faster fire rate |
-| **SNIPER** | Long-range precision, wide view, low health |
-| **FLANKER** | Rear attacks, large angle movement, rush tactics |
+| 角色 | 行为 |
+|------|------|
+| **突击手 (ASSAULT)** | 高机动性，近距离作战，积极侧翼包抄 |
+| **支援手 (SUPPORT)** | 火力压制，中距离，射速较快 |
+| **狙击手 (SNIPER)** | 远距离精确射击，宽视野，低血量 |
+| **侧翼手 (FLANKER)** | 绕后偷袭，大角度移动，冲锋战术 |
 
-### 2. Sound Perception System
+### 2. 声音感知系统
 
-AI can hear and respond to player sounds:
+AI 能听到并响应玩家的声音：
 
-| Sound Type | Range | AI Response |
-|------------|-------|-------------|
-| Gunshot | 80m | Take cover, alert allies |
-| Footstep | 28-40m | Investigate, look toward sound |
-| Reload | 32m | Opportunity to rush |
-| Impact | 60m | Alert and locate |
+| 声音类型 | 范围 | AI 响应 |
+|----------|------|---------|
+| 枪声 | 80m | 寻找掩体，通知队友 |
+| 脚步声 | 28-40m | 调查，朝声音方向看 |
+| 换弹声 | 32m | 可能选择冲锋 |
+| 撞击声 | 60m | 警觉并定位 |
 
-### 3. Cover & Tactics
+### 3. 掩体与战术
 
-- **Multi-dimensional cover evaluation** (distance, height, direction, exposure)
-- **Exposure risk assessment** - AI dynamically repositions when too exposed
-- **Guerrilla tactics** - Short bursts, rapid cover transitions
+- **多维度掩体评估**（距离、高度、方向、暴露程度）
+- **暴露风险评估** - 暴露过高时 AI 会动态转移
+- **游击战术** - 短点射，快速掩体转换
 
-### 4. Squad System
+### 4. 小队系统
 
-- Automatic squad formation (within 10m)
-- Target sharing between squad members
-- Coordinated role-based responses
+- 自动组队（10m 内）
+- 小队成员间目标共享
+- 基于角色的协调响应
 
-## 📄 Documentation
+## 📄 文档
 
-- [AI Optimization Report](AI_OPTIMIZATION_REPORT.md) - Role system, cover evaluation, aim prediction
-- [Attack Awareness & Sound System](ATTACK_AWARENESS_AND_SOUND_SYSTEM.md) - Sound perception, pre-emptive positioning
-- [Guerrilla Tactics Update](GUERRILLA_TACTICS_UPDATE.md) - Tactical movement, cover-based warfare
+- [AI 优化报告](AI_OPTIMIZATION_REPORT.md) - 角色系统、掩体评估、瞄准预测
+- [攻击意识与声音系统](ATTACK_AWARENESS_AND_SOUND_SYSTEM.md) - 声音感知、预判架枪
+- [游击战术更新](GUERRILLA_TACTICS_UPDATE.md) - 战术移动、掩体战斗
 
-## 🔧 Development
+## 🔧 开发
 
-### Key Files
+### 关键文件
 
-| File | Purpose |
-|------|---------|
-| `Enemy.gd` | Main AI logic (~4500 lines) |
-| `proto_controller.gd` | Player controller |
-| `project.godot` | Project settings |
+| 文件 | 用途 |
+|------|------|
+| `Enemy.gd` | 主要 AI 逻辑（~4500 行） |
+| `proto_controller.gd` | 玩家控制器 |
+| `project.godot` | 项目设置 |
 
-### Adding New Weapons
+### 添加新武器
 
-1. Add GLB model to `/models/`
-2. Add audio to `/sounds/`
-3. Update `proto_controller.gd` weapon definitions
+1. 将 GLB 模型添加到 `/models/`
+2. 将音频添加到 `/sounds/`
+3. 在 `proto_controller.gd` 中更新武器定义
 
-### AI Tuning Parameters
+### AI 调参
 
-Key variables in `Enemy.gd`:
+`Enemy.gd` 中的关键变量：
 
 ```gdscript
-# Accuracy
+# 精度
 var base_accuracy : float = 0.7
 var aim_prediction_enabled : bool = true
 
-# Behavior
+# 行为
 var reaction_time : float = 0.3
 var cover_check_interval : float = 2.0
 var reposition_threshold : float = 50.0
 ```
 
-## 📝 License
+## 📝 许可证
 
-MIT License - See [LICENSE](LICENSE) for details.
+MIT 许可证 - 详见 [LICENSE](LICENSE)。
 
-**Note**: While the code is MIT-licensed, game assets (characters, sounds, models) are for personal use only and not permitted for commercial use.
+**注意**：虽然代码采用 MIT 许可证，但游戏素材（角色、音效、模型）仅供个人使用，禁止商用。
 
-## 🤝 Contributing
+## 🤝 贡献
 
-Issues and pull requests welcome! This is a personal project - contributions are appreciated but not guaranteed to be merged.
+欢迎提交 Issue 和 Pull Request！这是个人项目，欢迎贡献但不保证合并。
 
-## 📅 Development Status
+## 📅 开发状态
 
-- **Status**: Alpha
-- **Last Updated**: April 2026
-- **Update Frequency**: As needed
+- **状态**：Alpha
+- **最后更新**：2026 年 4 月
+- **更新频率**：随缘
 
 ---
 
-*Built with Godot 4* 🚀
+*由 Godot 4 构建* 🚀
