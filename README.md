@@ -113,13 +113,7 @@ AI 能听到并响应玩家的声音：
 - 自动组队（10m 内）
 - 小队成员间目标共享
 - 基于角色的协调响应
-
-## 📄 文档
-
-- [AI 优化报告](AI_OPTIMIZATION_REPORT.md) - 角色系统、掩体评估、瞄准预测
-- [攻击意识与声音系统](ATTACK_AWARENESS_AND_SOUND_SYSTEM.md) - 声音感知、预判架枪
-- [游击战术更新](GUERRILLA_TACTICS_UPDATE.md) - 战术移动、掩体战斗
-
+  
 ## 🔧 开发
 
 ### 关键文件
